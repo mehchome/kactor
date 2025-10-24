@@ -19,8 +19,7 @@ plugins {
 }
 
 val myVersion = System.getenv("MY_VERSION")?.let { v: String ->
-    if (v.isNotBlank()) v
-    else null
+    v.ifBlank { null }
 } ?: rootDir.resolve("version.txt").let { f ->
     if (f.exists() && f.isFile) f.readText().trim() else "1.0.0"
 }
@@ -44,6 +43,7 @@ if (secretPropsFile.exists()) {
     ext["aws.accessKeyId"] = System.getenv("AWS_ACCESS_KEY_ID")
     ext["aws.secretAccessKey"] = System.getenv("AWS_SECRET_ACCESS_KEY")
     ext["aws.s3BucketUrl"] = System.getenv("AWS_S3_BUCKET_URL")
+    ext["releasePath"] = System.getenv("RELEASE_PATH")
 }
 
 dependencies {
@@ -108,8 +108,9 @@ publishing {
 
     repositories {
         maven {
+            val releasePath = getExtraString("releasePath") ?: error("Release path is not configured.")
             name = "S3"
-            url = uri(getExtraString("aws.s3BucketUrl")?.let { "$it/releases" }
+            url = uri(getExtraString("aws.s3BucketUrl")?.let { "$it/$releasePath" }
                 ?: error("S3 bucket URL is not configured."))
             credentials(AwsCredentials::class) {
                 accessKey = getExtraString("aws.accessKeyId") ?: error("AWS access key ID is not configured.")
