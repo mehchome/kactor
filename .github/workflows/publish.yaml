@@ -37,7 +37,7 @@ jobs:
           java-version: '21'
           cache: 'gradle'
           cache-dependency-path: |
-            **/build.gradle
+            **/build.gradle.kts
       - name: Compute Version
         id: semantic-version
         uses: PaulHatch/semantic-version@v5.4.0
