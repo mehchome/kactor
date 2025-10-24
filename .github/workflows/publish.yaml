@@ -1,0 +1,87 @@
+name: CI Pineline
+on:
+  push:
+    branches:
+      - master
+      - main
+      - development
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: arc-runner-set
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Get Branch Name
+        id: branch-name
+        run: |
+          BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/})
+          if [ "$BRANCH_NAME" == "main" ]; then
+            RELEASE_PATH="releases"
+            PRERELEASE=false
+          elif [ "$BRANCH_NAME" == "master" ]; then
+            RELEASE_PATH="releases"
+            PRERELEASE=false
+          else
+            RELEASE_PATH="snapshots"
+            PRERELEASE=true
+          fi
+          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "RELEASE_PATH=$RELEASE_PATH" >> $GITHUB_OUTPUT
+      - name: Setup JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'corretto'
+          java-version: '21'
+          cache: 'gradle'
+          cache-dependency-path: |
+            **/build.gradle.kts
+      - name: Compute Version
+        id: semantic-version
+        uses: PaulHatch/semantic-version@v5.4.0
+        with:
+          tag_prefix: ""
+          format: "${major}.${minor}.${patch}-pre${increment}"
+          major_pattern: "/:!|BREAKING CHANGE:/"
+          minor_pattern: "/feat:/"
+          bump_each_commit: true
+          bump_each_commit_patch_pattern: "/fix:/"
+          version_from_branch: true
+      - name: Echo Version
+        run: |
+          echo "Version: ${{ steps.semantic-version.outputs.version }}"
+          echo "Version Type: ${{ steps.semantic-version.outputs.version_type }}"
+          echo "Version Tag: ${{ steps.semantic-version.outputs.version_tag }}"
+          echo "Previous Version: ${{ steps.semantic-version.outputs.previous_version }}"
+      - name: Change wrapper permission
+        run: chmod a+x ./gradlew
+      - name: Build and Publish
+        run: ./gradlew build publish -x test --no-daemon
+        env:
+          MY_VERSION: ${{ steps.semantic-version.outputs.version_tag }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_BUCKET_URL: ${{ secrets.AWS_S3_BUCKET_URL }}
+          RELEASE_PATH: ${{ steps.branch-name.outputs.RELEASE_PATH }}
+      - name: Delete old tag
+        if: ${{ steps.semantic-version.outputs.version_tag == steps.semantic-version.outputs.previous_tag }}
+        run: |
+          git tag -d ${{ steps.semantic-version.outputs.version_tag }}
+          git push --delete origin ${{ steps.semantic-version.outputs.version_tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Delete Release
+        run: |
+          gh release delete ${{ steps.semantic-version.outputs.version_tag }} -y || true
+      - name: Tagging
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.semantic-version.outputs.version_tag }}
+          name: ${{ steps.semantic-version.outputs.version_tag }}
+          body: "Release ${{ steps.semantic.outputs.version }}"
+          generate_release_notes: true
+          prerelease: ${{ steps.branch-name.outputs.PRERELEASE }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
