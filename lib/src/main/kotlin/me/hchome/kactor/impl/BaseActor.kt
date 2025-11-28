@@ -1,4 +1,5 @@
 @file:Suppress("unused")
+
 package me.hchome.kactor.impl
 
 import kotlinx.coroutines.CompletableDeferred
@@ -12,7 +13,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.channels.getOrElse
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -23,7 +24,6 @@ import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorHandlerFactory
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystem
-import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.RestartStrategy.*
@@ -31,8 +31,6 @@ import me.hchome.kactor.Supervisor
 import me.hchome.kactor.TaskInfo
 import me.hchome.kactor.isNotEmpty
 import kotlin.collections.forEach
-import kotlin.coroutines.AbstractCoroutineContextElement
-import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 import kotlin.uuid.ExperimentalUuidApi
@@ -42,7 +40,7 @@ private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, Co
 
 
 internal class BaseActor(
-    private val dispatcher: CoroutineDispatcher,
+    dispatcher: CoroutineDispatcher,
     private val kClass: KClass<out ActorHandler>,
     factory: ActorHandlerFactory,
     val actorSystem: ActorSystem,
@@ -52,8 +50,9 @@ internal class BaseActor(
     val parentActor: Actor? = null
 ) : Actor,
     Supervisor,
-    CoroutineScope,
     DisposableHandle {
+
+    private val scope = CoroutineScope(dispatcher + SupervisorJob())
 
     private val mailbox =
         Channel<MessageWrapper>(actorConfig.capacity, actorConfig.onBufferOverflow, ::undeliveredMessageHandler)
@@ -75,16 +74,6 @@ internal class BaseActor(
         }
     }
 
-    private val askHandlerScope: AskActorHandlerScope = { h: ActorHandler, message: Any, sender: ActorRef, cb ->
-        context(context) {
-            h.onAsk(message, sender, cb)
-        }
-    }
-
-    private val uncaughtExceptionHandler = CoroutineExceptionHandler { _, e ->
-        launch { unCaughtFatalHandling(e) }
-    }
-
     override val ref: ActorRef
         get() = ActorRef(kClass, id)
 
@@ -92,11 +81,7 @@ internal class BaseActor(
         get() = parentActor?.ref ?: ActorRef.EMPTY
 
     val childrenRefs: MutableSet<ActorRef> = mutableSetOf()
-    private val context = ActorContextImpl(this@BaseActor, actorSystem)
-    private val holder = ActorContextHolder(context)
-    private val job = SupervisorJob()
-    override val coroutineContext: CoroutineContext
-        get() = dispatcher + job + holder + uncaughtExceptionHandler
+    private val context = ActorContextImpl(this@BaseActor, actorSystem, scope)
 
 
     val hasParent: Boolean
@@ -112,32 +97,38 @@ internal class BaseActor(
         if (parentActor != null && parentActor is BaseActor) {
             parentActor.addChild(this.ref)
         }
-        processingMessage()
+        context(context) {
+            scope.launch {
+                processingMessage()
+            }
+        }
     }
 
     override fun send(message: Any, sender: ActorRef) {
-        val result = mailbox.trySend(SetStatusMessageWrapperImpl(message, sender))
-        if (!result.isSuccess) {
-            val e = result.exceptionOrNull()
+        mailbox.trySend(SetStatusMessageWrapperImpl(message, sender)).getOrElse { throwable ->
             actorSystem.notifySystem(
                 sender, this.ref, "Failed to send",
-                ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, e
+                ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, throwable
             )
-            throw IllegalStateException("Failed to send message to actor ${this::class.simpleName}: $message", e)
+            throw IllegalStateException(
+                "Failed to send message to actor ${this::class.simpleName}: $message",
+                throwable
+            )
         }
     }
 
     override fun <T : Any> ask(message: Any, sender: ActorRef, callback: CompletableDeferred<in T>) {
-        val result = mailbox.trySend(GetStatusMessageWrapperImpl(message, sender, callback))
-        if (!result.isSuccess) {
-            val e = result.exceptionOrNull()
+        mailbox.trySend(GetStatusMessageWrapperImpl(message, sender, callback)).getOrElse { throwable ->
             actorSystem.notifySystem(
                 sender, this.ref, "Failed to ask",
-                ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, e
+                ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, throwable
             )
-            if (e != null) {
-                callback.completeExceptionally(e)
-            }
+            callback.completeExceptionally(
+                IllegalStateException(
+                    "Failed to ask to actor ${this::class.simpleName}: $message",
+                    throwable
+                )
+            )
         }
     }
 
@@ -163,7 +154,7 @@ internal class BaseActor(
         block: suspend ActorHandler.(String) -> Unit
     ): Job {
         val taskInfo = TaskInfo.Task(initDelay, block)
-        return launch(taskInfo + taskExceptionHandler) {
+        return scope.launch(taskInfo + taskExceptionHandler) {
             delay(initDelay)
             block(handler, taskInfo.id)
         }
@@ -176,7 +167,7 @@ internal class BaseActor(
         block: suspend ActorHandler.(String) -> Unit
     ): Job {
         val taskInfo = TaskInfo.Schedule(period, initDelay, block)
-        return launch(taskInfo + taskExceptionHandler) {
+        return scope.launch(taskInfo + taskExceptionHandler) {
             delay(initDelay)
             while (isActive) {
                 block(handler, taskInfo.id)
@@ -195,42 +186,39 @@ internal class BaseActor(
         )
     }
 
+    context(context: ActorContext)
     @Suppress("UNCHECKED_CAST")
-    private fun processingMessage() {
-        launch {
-            context(context) {
-                try {
-                    handler.preStart()
-                } catch (e: Throwable) {
-                    fatalHandling(e, "Start actor failed", ref)
-                    return@launch
-                }
-                mailbox.consumeEach { wrapper ->
-                    val message = wrapper.message
-                    val sender = wrapper.sender
-                    try {
-                        when (wrapper) {
-                            is SetStatusMessageWrapperImpl -> {
-                                val (message, sender) = wrapper
-                                handlerScope(handler, message, sender)
-                            }
+    private suspend fun processingMessage() {
+        try {
+            handler.preStart()
+        } catch (e: Throwable) {
+            fatalHandling(e, "Start actor failed", ref)
+            return
+        }
+        mailbox.consumeEach { wrapper ->
+            val message = wrapper.message
+            val sender = wrapper.sender
+            try {
+                when (wrapper) {
+                    is SetStatusMessageWrapperImpl -> {
+                        val (message, sender) = wrapper
+                        handler.onMessage(message, sender)
+                    }
 
-                            is GetStatusMessageWrapperImpl<*> -> {
-                                val (message, sender, cb) = wrapper
-                                askHandlerScope(handler, message, sender, cb as CompletableDeferred<in Any>)
-                            }
-                        }
-                    } catch (e: Throwable) {
-                        fatalHandling(e, message, sender)
+                    is GetStatusMessageWrapperImpl<*> -> {
+                        val (message, sender, cb) = wrapper
+                        handler.onAsk(message, sender, cb as CompletableDeferred<in Any>)
                     }
                 }
-                try {
-                    handler.postStop()
-                } catch (e: Throwable) {
-                    fatalHandling(e, "Stop actor failed", ref)
-                    return@launch
-                }
+            } catch (e: Throwable) {
+                fatalHandling(e, message, sender)
             }
+        }
+        try {
+            handler.postStop()
+        } catch (e: Throwable) {
+            fatalHandling(e, "Stop actor failed", ref)
+            return
         }
     }
 
@@ -291,10 +279,6 @@ internal class BaseActor(
 
     }
 
-    private suspend fun unCaughtFatalHandling(e: Throwable) {
-        fatalHandling(e, "Uncaught fatal message", ref)
-    }
-
     private suspend fun fatalHandling(e: Throwable, message: Any, sender: ActorRef) {
         actorSystem.notifySystem(
             sender, ref, "Fatal message: $message",
@@ -327,21 +311,13 @@ internal class BaseActor(
     @OptIn(DelicateCoroutinesApi::class)
     override fun dispose() {
         // stop mailbox
-        if (!mailbox.isClosedForSend) {
-            mailbox.close()
-        }
-        // notify handler cleanup
+        mailbox.close()
         context(context) {
             handler.preDestroy()
         }
 
         // cancel all jobs
-        job.cancel()
-
-        // just in case
-        if (this.isActive) {
-            this.cancel()
-        }
+        scope.cancel()
 
         if (childrenRefs.isNotEmpty()) {
             val children = childrenRefs.toSet() // copy a
@@ -355,16 +331,6 @@ internal class BaseActor(
         }
     }
 }
-
-private class ActorContextHolder(val context: ActorContext) : AbstractCoroutineContextElement(ActorContextHolder) {
-    companion object Key : CoroutineContext.Key<ActorContextHolder>
-}
-
-/**
- * context function get actor context from coroutine context
- */
-suspend fun ActorHandler.context(): ActorContext =
-    currentCoroutineContext()[ActorContextHolder]?.context ?: throw ActorSystemException("No context")
 
 /**
  * Create actor
