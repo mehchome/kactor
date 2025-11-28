@@ -17,8 +17,8 @@ import kotlin.time.Duration
  * Implementation of [ActorContext] that provides access to the actor system and actor's context.
  * Open BaseActor's CoroutineScope to use it in the actor handler's methods.
  */
-internal data class ActorContextImpl(private val self: BaseActor, private val system: ActorSystem) : ActorContext,
-    Attributes by AttributesImpl(), CoroutineScope by self {
+internal data class ActorContextImpl(private val self: BaseActor, private val system: ActorSystem, private val scope: CoroutineScope) : ActorContext,
+    Attributes by AttributesImpl(), CoroutineScope by scope {
 
     override fun getService(kClass: KClass<out ActorHandler>): ActorRef = system.getService(kClass)
 
@@ -37,7 +37,7 @@ internal data class ActorContextImpl(private val self: BaseActor, private val sy
         val ref = ActorRef.ofService(kClass)
         if (ref !in system) {
             system.notifySystem(
-                self.ref, ActorRef.Companion.EMPTY,
+                self.ref, ActorRef.EMPTY,
                 "Target service $kClass is not found: $message",
                 ActorSystemNotificationMessage.NotificationType.ACTOR_EXCEPTION
             )
@@ -51,7 +51,7 @@ internal data class ActorContextImpl(private val self: BaseActor, private val sy
     override fun sendChildren(message: Any) {
         if (self.singleton) {
             system.notifySystem(
-                self.ref, ActorRef.Companion.EMPTY,
+                self.ref, ActorRef.EMPTY,
                 "Target children shouldn't be a service: $message",
                 ActorSystemNotificationMessage.NotificationType.ACTOR_EXCEPTION
             )
@@ -59,7 +59,7 @@ internal data class ActorContextImpl(private val self: BaseActor, private val sy
         }
         if (self.childrenRefs.isEmpty()) {
             system.notifySystem(
-                self.ref, ActorRef.Companion.EMPTY,
+                self.ref, ActorRef.EMPTY,
                 "Send a message to an empty children: $message",
                 ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
             )
@@ -71,7 +71,7 @@ internal data class ActorContextImpl(private val self: BaseActor, private val sy
     }
 
     override fun getChild(id: String): ActorRef {
-        return children.firstOrNull { it.actorId.endsWith(id) } ?: ActorRef.Companion.EMPTY
+        return children.firstOrNull { it.actorId.endsWith(id) } ?: ActorRef.EMPTY
     }
 
     override fun sendChild(childRef: ActorRef, message: Any) {
@@ -82,7 +82,7 @@ internal data class ActorContextImpl(private val self: BaseActor, private val sy
             system.send(it, self.ref, message)
         } ?: run {
             system.notifySystem(
-                self.ref, ActorRef.Companion.EMPTY,
+                self.ref, ActorRef.EMPTY,
                 "Send a message to an empty child $childRef: $message",
                 ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
             )
@@ -94,7 +94,7 @@ internal data class ActorContextImpl(private val self: BaseActor, private val sy
             system.send(self.parent, self.ref, message)
         } else {
             system.notifySystem(
-                self.ref, ActorRef.Companion.EMPTY,
+                self.ref, ActorRef.EMPTY,
                 "Send a message to an empty parent: $message",
                 ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
             )
@@ -136,7 +136,7 @@ internal data class ActorContextImpl(private val self: BaseActor, private val sy
         id: String?,
         kClass: KClass<T>
     ): ActorRef {
-        return system.actorOfSuspend(id, ActorRef.Companion.EMPTY, kClass)
+        return system.actorOfSuspend(id, ActorRef.EMPTY, kClass)
     }
 
     override fun schedule(
@@ -159,7 +159,7 @@ internal data class ActorContextImpl(private val self: BaseActor, private val sy
             system.send(ref, self.ref, message)
         } catch (e: IllegalStateException) {
             system.notifySystem(
-                self.ref, ActorRef.Companion.EMPTY,
+                self.ref, ActorRef.EMPTY,
                 "Send a message to an empty actor $ref: $message",
                 ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
             )
@@ -170,11 +170,11 @@ internal data class ActorContextImpl(private val self: BaseActor, private val sy
     override fun <T : Any> ask(message: Any, ref: ActorRef, timeout: Duration): Deferred<T> {
         if (ref == self.ref) {
             throw ActorSystemException("Can't ask self")
-        } else if (ref == ActorRef.Companion.EMPTY) {
+        } else if (ref == ActorRef.EMPTY) {
             throw ActorSystemException("Can't ask empty actor")
         }
         if (ref in system) {
-            return system.ask<T>(ref, self.ref, message)
+            return system.ask(ref, self.ref, message)
         } else {
             throw ActorSystemException("Actor not in system")
         }
