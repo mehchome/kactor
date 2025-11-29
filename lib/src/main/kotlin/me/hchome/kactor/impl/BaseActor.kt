@@ -39,7 +39,6 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
-import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.ExperimentalUuidApi
 
 private typealias ActorHandlerScope = suspend ActorHandler.(Any, ActorRef) -> Unit
@@ -207,26 +206,30 @@ internal class BaseActor(
             fatalHandling(e, "Start actor failed", ref)
             return
         }
-        mailbox.consumeEach { wrapper ->
-            val message = wrapper.message
-            val sender = wrapper.sender
-            try {
-                when (wrapper) {
-                    is SetStatusMessageWrapperImpl -> {
-                        val (message, sender) = wrapper
-                        handler.onMessage(message, sender)
-                    }
+        try {
+            mailbox.consumeEach { wrapper ->
+                val message = wrapper.message
+                val sender = wrapper.sender
+                try {
+                    when (wrapper) {
+                        is SetStatusMessageWrapperImpl -> {
+                            val (message, sender) = wrapper
+                            handler.onMessage(message, sender)
+                        }
 
-                    is GetStatusMessageWrapperImpl<*> -> {
-                        val (message, sender, cb) = wrapper
-                        handler.onAsk(message, sender, cb as CompletableDeferred<in Any>)
+                        is GetStatusMessageWrapperImpl<*> -> {
+                            val (message, sender, cb) = wrapper
+                            handler.onAsk(message, sender, cb as CompletableDeferred<in Any>)
+                        }
                     }
+                } catch (e: CancellationException) {
+                    LOGGER.debug("Actor cancelled: {}", ref, e)
+                } catch (e: Throwable) {
+                    fatalHandling(e, message, sender)
                 }
-            } catch (e: CancellationException) {
-
-            } catch (e: Throwable) {
-                fatalHandling(e, message, sender)
             }
+        } catch (e: Throwable) {
+            fatalHandling(e, "Actor processing failed", ref)
         }
         try {
             handler.postStop()
