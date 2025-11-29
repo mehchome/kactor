@@ -50,11 +50,14 @@ dependencies {
     compileOnly(kotlin("stdlib"))
     compileOnly(kotlin("reflect"))
     compileOnly(libs.coroutines)
+    compileOnly(libs.slf4j.api)
     testImplementation(kotlin("test"))
     testImplementation(kotlin("stdlib"))
     testImplementation(kotlin("reflect"))
+    testImplementation(libs.slf4j.api)
     testImplementation(libs.coroutines)
     testImplementation(libs.coroutines.test)
+    testRuntimeOnly(libs.logback)
 }
 
 tasks.test {
