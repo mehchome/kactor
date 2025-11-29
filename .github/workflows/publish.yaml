@@ -44,10 +44,10 @@ jobs:
         with:
           tag_prefix: ""
           format: "${major}.${minor}.${patch}-pre${increment}"
-          major_pattern: "/:!|BREAKING CHANGE:/"
-          minor_pattern: "/feat:/"
+          major_pattern: "/BREAKING CHANGE!:/"
+          minor_pattern: "/feat:/i"
           bump_each_commit: true
-          bump_each_commit_patch_pattern: "/fix:/"
+          bump_each_commit_patch_pattern: "/(fix|patch):/i"
           version_from_branch: true
       - name: Echo Version
         run: |
