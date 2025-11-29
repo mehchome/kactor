@@ -35,6 +35,8 @@ import me.hchome.kactor.RestartStrategy.OneForOne
 import me.hchome.kactor.RestartStrategy.Resume
 import me.hchome.kactor.RestartStrategy.Stop
 import me.hchome.kactor.isNotEmpty
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 import kotlin.time.Duration
@@ -107,6 +109,9 @@ internal class ActorSystemImpl(
         singleton: Boolean,
         cause: Throwable
     ) {
+        if(LOGGER.isDebugEnabled) {
+            LOGGER.debug("Supervise actor ${child.actorId} with restart strategy ${restartStrategy.javaClass.simpleName}")
+        }
         when (restartStrategy) {
             is OneForOne, is AllForOne, is Escalate -> {
                 val attributes = snapshot(child)
@@ -116,7 +121,7 @@ internal class ActorSystemImpl(
                 } else {
                     actorOfSuspend(child.rawId, ActorRef.EMPTY, child.handler)
                 }
-                if(attributes != null) {
+                if (attributes != null) {
                     recover(new, attributes)
                 }
             }
@@ -134,7 +139,7 @@ internal class ActorSystemImpl(
                 } else {
                     actorOfSuspend(child.rawId, ActorRef.EMPTY, child.handler)
                 }
-                if(attributes != null) {
+                if (attributes != null) {
                     recover(new, attributes)
                 }
             }
@@ -148,7 +153,7 @@ internal class ActorSystemImpl(
         kClass: KClass<T>
     ): ActorRef where T : ActorHandler {
         val parentActor = if (parent.isNotEmpty()) this[parent] else null
-        var actorId = buildActorId(parent, id, singleton, kClass)
+        val actorId = buildActorId(parent, id, singleton, kClass)
 
         val config = this[kClass]
         val actorDispatcher = config.dispatcher
@@ -255,5 +260,9 @@ internal class ActorSystemImpl(
         }
         val notification = ActorSystemNotificationMessage(sender, receiver, level, message, throwable)
         _notifications.tryEmit(notification)
+    }
+
+    companion object {
+        private val LOGGER: Logger = LoggerFactory.getLogger(ActorSystemImpl::class.java)
     }
 }

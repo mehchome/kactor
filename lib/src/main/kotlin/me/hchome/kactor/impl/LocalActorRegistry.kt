@@ -22,7 +22,7 @@ internal class LocalActorRegistry: ActorRegistry{
 
     override fun get(ref: ActorRef): Actor {
         if(!actors.containsKey(ref)) throw IllegalArgumentException("Actor does not exist")
-        return actors[ref]!!
+        return actors[ref]?:throw IllegalStateException("Actor not found")
     }
 
     override fun contains(ref: ActorRef): Boolean {

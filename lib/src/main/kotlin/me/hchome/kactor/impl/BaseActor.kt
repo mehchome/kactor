@@ -10,6 +10,7 @@ import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.DisposableHandle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
@@ -17,6 +18,7 @@ import kotlinx.coroutines.channels.getOrElse
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import me.hchome.kactor.Actor
 import me.hchome.kactor.ActorConfig
 import me.hchome.kactor.ActorContext
@@ -30,9 +32,14 @@ import me.hchome.kactor.RestartStrategy.*
 import me.hchome.kactor.Supervisor
 import me.hchome.kactor.TaskInfo
 import me.hchome.kactor.isNotEmpty
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import kotlin.collections.forEach
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.reflect.KClass
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.ExperimentalUuidApi
 
 private typealias ActorHandlerScope = suspend ActorHandler.(Any, ActorRef) -> Unit
@@ -105,30 +112,35 @@ internal class BaseActor(
     }
 
     override fun send(message: Any, sender: ActorRef) {
-        mailbox.trySend(SetStatusMessageWrapperImpl(message, sender)).getOrElse { throwable ->
-            actorSystem.notifySystem(
-                sender, this.ref, "Failed to send",
-                ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, throwable
-            )
-            throw IllegalStateException(
-                "Failed to send message to actor ${this::class.simpleName}: $message",
-                throwable
-            )
+        scope.launch {
+            try {
+                withTimeout(1.minutes) {
+                    mailbox.send(SetStatusMessageWrapperImpl(message, sender))
+                }
+            } catch (e: TimeoutCancellationException) {
+                if(LOGGER.isDebugEnabled) LOGGER.debug("Actor send timeout for $message", e)
+                actorSystem.notifySystem(
+                    ref, ActorRef.EMPTY, "Send timeout for $message",
+                    ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED, e
+                )
+            }
         }
     }
 
     override fun <T : Any> ask(message: Any, sender: ActorRef, callback: CompletableDeferred<in T>) {
-        mailbox.trySend(GetStatusMessageWrapperImpl(message, sender, callback)).getOrElse { throwable ->
-            actorSystem.notifySystem(
-                sender, this.ref, "Failed to ask",
-                ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, throwable
-            )
-            callback.completeExceptionally(
-                IllegalStateException(
-                    "Failed to ask to actor ${this::class.simpleName}: $message",
-                    throwable
+        scope.launch {
+            try {
+                withTimeout(1.minutes) {
+                    mailbox.send(GetStatusMessageWrapperImpl(message, sender, callback))
+                }
+            } catch (e: TimeoutCancellationException) {
+                if(LOGGER.isDebugEnabled) LOGGER.debug("Actor ask timeout for $message", e)
+                callback.completeExceptionally(e)
+                actorSystem.notifySystem(
+                    ref, ActorRef.EMPTY, "Ask timeout for $message",
+                    ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED, e
                 )
-            )
+            }
         }
     }
 
@@ -210,6 +222,8 @@ internal class BaseActor(
                         handler.onAsk(message, sender, cb as CompletableDeferred<in Any>)
                     }
                 }
+            } catch (e: CancellationException) {
+
             } catch (e: Throwable) {
                 fatalHandling(e, message, sender)
             }
@@ -280,6 +294,9 @@ internal class BaseActor(
     }
 
     private suspend fun fatalHandling(e: Throwable, message: Any, sender: ActorRef) {
+        if (LOGGER.isDebugEnabled) {
+            LOGGER.error("Fatal message: $message", e)
+        }
         actorSystem.notifySystem(
             sender, ref, "Fatal message: $message",
             notificationType = ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, e
@@ -329,6 +346,10 @@ internal class BaseActor(
         if (parentActor != null && parentActor is BaseActor) {
             parentActor.removeChild(this.ref)
         }
+    }
+
+    companion object {
+        private val LOGGER: Logger = LoggerFactory.getLogger(BaseActor::class.java)
     }
 }
 
