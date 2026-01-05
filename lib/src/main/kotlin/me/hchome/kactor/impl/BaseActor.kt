@@ -27,7 +27,7 @@ import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
-import me.hchome.kactor.RestartStrategy.*
+import me.hchome.kactor.SupervisorStrategy.*
 import me.hchome.kactor.Supervisor
 import me.hchome.kactor.TaskInfo
 import me.hchome.kactor.isNotEmpty
@@ -245,7 +245,7 @@ internal class BaseActor(
         cause: Throwable,
     ) {
         val config = this.actorConfig
-        when (config.restartStrategy) {
+        when (config.supervisorStrategy) {
             is OneForOne -> {
                 val attributes = snapshot(child)
                 actorSystem.destroyActor(child)
@@ -274,7 +274,7 @@ internal class BaseActor(
             is Stop -> actorSystem.destroyActor(child)
             is Escalate -> fatalHandling(cause, "Bubble up the supervisor", ref)
             is Backoff -> {
-                val (init, max) = config.restartStrategy
+                val (init, max) = config.supervisorStrategy
                 delay(init)
                 actorSystem.destroyActor(child)
                 delay(max)
@@ -320,10 +320,8 @@ internal class BaseActor(
     override fun dispose() {
         // stop mailbox
         mailbox.close()
-        context(context) {
-            handler.preDestroy()
-        }
-
+        mailBoxJob?.cancel()
+        handler.preDestroy()
         // cancel all jobs
         scope.cancel()
 

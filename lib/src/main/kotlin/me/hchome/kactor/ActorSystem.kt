@@ -141,9 +141,9 @@ interface ActorSystem : Supervisor, ActorHandlerRegistry, DisposableHandle {
             dispatcher: CoroutineDispatcher = Dispatchers.Default,
             factory: ActorHandlerFactory = DefaultActorHandlerFactory,
             registry: ActorRegistry = LocalActorRegistry(),
-            restartStrategy: RestartStrategy = RestartStrategy.OneForOne
+            supervisorStrategy: SupervisorStrategy = SupervisorStrategy.OneForOne
         ): ActorSystem {
-            return ActorSystemImpl(dispatcher, factory, registry, restartStrategy)
+            return ActorSystemImpl(dispatcher, factory, registry, supervisorStrategy)
         }
     }
 }

@@ -12,13 +12,15 @@ import kotlin.time.Duration
  * [Escalate] escalates the failure to the supervisor
  *
  */
-sealed interface RestartStrategy {
-    object OneForOne : RestartStrategy
-    object AllForOne : RestartStrategy
-    data class Backoff(val initialDelay: Duration, val maxDelay: Duration) : RestartStrategy
-    object Resume : RestartStrategy
-    object Stop : RestartStrategy
-    object Escalate : RestartStrategy
+sealed interface SupervisorStrategy {
+
+
+    object OneForOne : SupervisorStrategy
+    object AllForOne : SupervisorStrategy
+    data class Backoff(val initialDelay: Duration, val maxDelay: Duration) : SupervisorStrategy
+    object Resume : SupervisorStrategy
+    object Stop : SupervisorStrategy
+    object Escalate : SupervisorStrategy
 }
 
 interface Supervisor {
@@ -32,7 +34,7 @@ interface Supervisor {
         child: ActorRef,
         singleton: Boolean,
         cause: Throwable,
-  )
+    )
 
     /**
      * recover the child actor attributes

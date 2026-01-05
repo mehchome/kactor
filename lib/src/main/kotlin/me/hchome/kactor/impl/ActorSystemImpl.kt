@@ -27,13 +27,13 @@ import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
-import me.hchome.kactor.RestartStrategy
-import me.hchome.kactor.RestartStrategy.AllForOne
-import me.hchome.kactor.RestartStrategy.Backoff
-import me.hchome.kactor.RestartStrategy.Escalate
-import me.hchome.kactor.RestartStrategy.OneForOne
-import me.hchome.kactor.RestartStrategy.Resume
-import me.hchome.kactor.RestartStrategy.Stop
+import me.hchome.kactor.SupervisorStrategy
+import me.hchome.kactor.SupervisorStrategy.AllForOne
+import me.hchome.kactor.SupervisorStrategy.Backoff
+import me.hchome.kactor.SupervisorStrategy.Escalate
+import me.hchome.kactor.SupervisorStrategy.OneForOne
+import me.hchome.kactor.SupervisorStrategy.Resume
+import me.hchome.kactor.SupervisorStrategy.Stop
 import me.hchome.kactor.isNotEmpty
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -50,7 +50,7 @@ internal class ActorSystemImpl(
     dispatcher: CoroutineDispatcher,
     handlerFactory: ActorHandlerFactory,
     actorRegistry: ActorRegistry,
-    val restartStrategy: RestartStrategy
+    val supervisorStrategy: SupervisorStrategy
 ) :
     ActorSystem,
     ActorHandlerRegistry by ActorHandlerRegistryImpl(dispatcher, handlerFactory),
@@ -109,9 +109,9 @@ internal class ActorSystemImpl(
     ) {
         val actor = this[child]
         if (LOGGER.isDebugEnabled) {
-            LOGGER.debug("Supervise actor ${child.actorId} with restart strategy ${restartStrategy.javaClass.simpleName}")
+            LOGGER.debug("Supervise actor ${child.actorId} with restart strategy ${supervisorStrategy.javaClass.simpleName}")
         }
-        when (restartStrategy) {
+        when (supervisorStrategy) {
             is OneForOne, is AllForOne, is Escalate -> {
                 val attributes = snapshot(child)
                 destroyActor(child)
@@ -128,7 +128,7 @@ internal class ActorSystemImpl(
             is Resume -> {}
             is Stop -> destroyActor(child)
             is Backoff -> {
-                val (init, max) = restartStrategy
+                val (init, max) = supervisorStrategy
                 val attributes = snapshot(child)
                 delay(init)
                 destroyActor(child)

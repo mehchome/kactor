@@ -29,6 +29,10 @@ data class ActorRef(
 
     fun parentOf() = of(path.parent?.toString() ?: "")
 
+    fun isChildOf(ref: ActorRef) = ref.path == path.parent
+
+    fun isParentOf(ref: ActorRef) = ref.path.parent == path
+
     companion object {
         @JvmStatic
         val EMPTY = ActorRef( "")

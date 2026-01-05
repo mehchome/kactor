@@ -5,7 +5,6 @@ package me.hchome.kactor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
@@ -13,9 +12,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.shareIn
-import me.hchome.kactor.impl.ActorContextImpl
 import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 import kotlin.time.Duration
@@ -314,7 +310,7 @@ sealed class TaskInfo @OptIn(ExperimentalUuidApi::class) constructor(
 data class ActorConfig(
     val capacity: Int = 100,
     val onBufferOverflow: BufferOverflow = BufferOverflow.SUSPEND,
-    val restartStrategy: RestartStrategy = RestartStrategy.OneForOne
+    val supervisorStrategy: SupervisorStrategy = SupervisorStrategy.OneForOne
 ) {
     companion object {
         @JvmStatic
