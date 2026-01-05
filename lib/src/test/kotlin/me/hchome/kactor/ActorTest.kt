@@ -10,7 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import me.hchome.kactor.B
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
@@ -18,7 +18,6 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
-import kotlin.uuid.Uuid.Companion.random
 
 data class TestSignal<T>(val completing: CompletableDeferred<in T>) where T : Any
 
@@ -33,7 +32,7 @@ class TestActor : ActorHandler, CoroutineScope by CoroutineScope(Dispatchers.IO)
 
     context(context: ActorContext)
     override suspend fun onMessage(message: Any, sender: ActorRef) {
-        launch(this@TestActor.coroutineContext + currentCoroutineContext()) {
+        launch(this@TestActor.coroutineContext) {
             delay(1000)
             println("Task111: ${context.ref}")
         }
@@ -45,7 +44,7 @@ class TestActor : ActorHandler, CoroutineScope by CoroutineScope(Dispatchers.IO)
         println("$message -- $sender")
         when (message) {
             is TestSignal<*> -> {
-                val next = Random.Default.nextInt(1, 5000)
+                val next = Random.nextInt(1, 5000)
                 context[AttrKey] = next
                 context[CallBackKey] = message.completing as CompletableDeferred<String>
                 println("${context.ref} set signal - $next")
@@ -58,7 +57,7 @@ class TestActor : ActorHandler, CoroutineScope by CoroutineScope(Dispatchers.IO)
                     context[CountKey] = context.children.size
 
                     context.children.forEach { child ->
-                        val next = Random.Default.nextInt(1, 5000)
+                        val next = Random.nextInt(1, 5000)
                         scope.launch {
                             delay(next.milliseconds)
                             context.sendChild(child, "${context.ref} follow message to $child: $message - next: $next ms")
@@ -238,8 +237,9 @@ class ActorTest {
             println(future2.await())
             println("***==")
         }
-
-        joinAll(job1, job2)
+        withTimeout(5.seconds) {
+            joinAll(job1, job2)
+        }
     }
 
 

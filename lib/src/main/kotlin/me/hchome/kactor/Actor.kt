@@ -2,6 +2,7 @@ package me.hchome.kactor
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.DisposableHandle
+import kotlin.reflect.KClass
 
 /**
  * An actor is a business logic object that can receive messages and send messages to other actors.
@@ -10,6 +11,7 @@ import kotlinx.coroutines.DisposableHandle
 interface Actor : Supervisor, DisposableHandle {
 
     val ref: ActorRef
+    val handlerClass: KClass<out ActorHandler>
 
     val singleton: Boolean
 

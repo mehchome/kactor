@@ -9,19 +9,18 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.DisposableHandle
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.consumeEach
-import kotlinx.coroutines.channels.getOrElse
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import me.hchome.kactor.Actor
 import me.hchome.kactor.ActorConfig
-import me.hchome.kactor.ActorContext
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorHandlerFactory
 import me.hchome.kactor.ActorRef
@@ -47,7 +46,7 @@ private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, Co
 
 internal class BaseActor(
     dispatcher: CoroutineDispatcher,
-    private val kClass: KClass<out ActorHandler>,
+    override val handlerClass: KClass<out ActorHandler>,
     factory: ActorHandlerFactory,
     val actorSystem: ActorSystem,
     val id: String,
@@ -62,6 +61,8 @@ internal class BaseActor(
 
     private val mailbox =
         Channel<MessageWrapper>(actorConfig.capacity, actorConfig.onBufferOverflow, ::undeliveredMessageHandler)
+
+    private var mailBoxJob: Job? = null
 
     private val handlerScope: ActorHandlerScope = { h: ActorHandler, message: Any, sender: ActorRef ->
         context(context) {
@@ -81,7 +82,7 @@ internal class BaseActor(
     }
 
     override val ref: ActorRef
-        get() = ActorRef(kClass, id)
+        get() = ActorRef(id)
 
     val parent: ActorRef
         get() = parentActor?.ref ?: ActorRef.EMPTY
@@ -96,18 +97,14 @@ internal class BaseActor(
     override fun contains(ref: ActorRef): Boolean = ref in childrenRefs
 
     val handler: ActorHandler by lazy {
-        factory.getBean(kClass)
+        factory.getBean(handlerClass)
     }
 
     init {
         if (parentActor != null && parentActor is BaseActor) {
             parentActor.addChild(this.ref)
         }
-        context(context) {
-            scope.launch {
-                processingMessage()
-            }
-        }
+        processingMessage()
     }
 
     override fun send(message: Any, sender: ActorRef) {
@@ -117,7 +114,7 @@ internal class BaseActor(
                     mailbox.send(SetStatusMessageWrapperImpl(message, sender))
                 }
             } catch (e: TimeoutCancellationException) {
-                if(LOGGER.isDebugEnabled) LOGGER.debug("Actor send timeout for $message", e)
+                if (LOGGER.isDebugEnabled) LOGGER.debug("Actor send timeout for $message", e)
                 actorSystem.notifySystem(
                     ref, ActorRef.EMPTY, "Send timeout for $message",
                     ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED, e
@@ -133,7 +130,7 @@ internal class BaseActor(
                     mailbox.send(GetStatusMessageWrapperImpl(message, sender, callback))
                 }
             } catch (e: TimeoutCancellationException) {
-                if(LOGGER.isDebugEnabled) LOGGER.debug("Actor ask timeout for $message", e)
+                if (LOGGER.isDebugEnabled) LOGGER.debug("Actor ask timeout for $message", e)
                 callback.completeExceptionally(e)
                 actorSystem.notifySystem(
                     ref, ActorRef.EMPTY, "Ask timeout for $message",
@@ -197,45 +194,36 @@ internal class BaseActor(
         )
     }
 
-    context(context: ActorContext)
     @Suppress("UNCHECKED_CAST")
-    private suspend fun processingMessage() {
-        try {
-            handler.preStart()
-        } catch (e: Throwable) {
-            fatalHandling(e, "Start actor failed", ref)
-            return
-        }
-        try {
-            mailbox.consumeEach { wrapper ->
-                val message = wrapper.message
-                val sender = wrapper.sender
+    private fun processingMessage() {
+        mailBoxJob = scope.launch {
+            context(context) {
                 try {
-                    when (wrapper) {
-                        is SetStatusMessageWrapperImpl -> {
-                            val (message, sender) = wrapper
-                            handler.onMessage(message, sender)
-                        }
-
-                        is GetStatusMessageWrapperImpl<*> -> {
-                            val (message, sender, cb) = wrapper
-                            handler.onAsk(message, sender, cb as CompletableDeferred<in Any>)
+                    handler.preStart()
+                    for (msg in mailbox) {
+                        val message = msg.message
+                        val sender = msg.sender
+                        try {
+                            when (msg) {
+                                is SetStatusMessageWrapperImpl -> handler.onMessage(message, sender)
+                                is GetStatusMessageWrapperImpl<*> -> handler.onAsk(
+                                    message,
+                                    sender,
+                                    msg.callback as CompletableDeferred<in Any>
+                                )
+                            }
+                        } catch (e: CancellationException) {
+                            LOGGER.debug("Actor cancelled: {}", ref, e)
+                        } catch (e: Throwable) {
+                            fatalHandling(e, message, sender)
                         }
                     }
-                } catch (e: CancellationException) {
-                    LOGGER.debug("Actor cancelled: {}", ref, e)
-                } catch (e: Throwable) {
-                    fatalHandling(e, message, sender)
+                } finally {
+                    withContext(NonCancellable) {
+                        handler.postStop()
+                    }
                 }
             }
-        } catch (e: Throwable) {
-            fatalHandling(e, "Actor processing failed", ref)
-        }
-        try {
-            handler.postStop()
-        } catch (e: Throwable) {
-            fatalHandling(e, "Stop actor failed", ref)
-            return
         }
     }
 
@@ -261,7 +249,7 @@ internal class BaseActor(
             is OneForOne -> {
                 val attributes = snapshot(child)
                 actorSystem.destroyActor(child)
-                val ref = actorSystem.actorOfSuspend(child.rawId, ref, child.handler)
+                val ref = actorSystem.actorOfSuspend(child.name, ref, handlerClass)
                 if (attributes != null) {
                     recover(ref, attributes)
                 }
@@ -275,7 +263,7 @@ internal class BaseActor(
                 childrenRefs.clear()
                 children.forEach {
                     val attr = snapshot(it)
-                    val childRef = actorSystem.actorOfSuspend(it.rawId, ref, it.handler)
+                    val childRef = actorSystem.actorOfSuspend(it.name, ref, handlerClass)
                     if (attr != null) {
                         recover(childRef, attr)
                     }
@@ -290,7 +278,7 @@ internal class BaseActor(
                 delay(init)
                 actorSystem.destroyActor(child)
                 delay(max)
-                actorSystem.actorOfSuspend(child.rawId, ref, child.handler)
+                actorSystem.actorOfSuspend(child.name, ref, handlerClass)
             }
         }
 

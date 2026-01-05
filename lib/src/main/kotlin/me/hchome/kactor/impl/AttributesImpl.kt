@@ -22,7 +22,7 @@ internal class AttributesImpl(ref: Attributes? = null) : Attributes {
         get() = attributes.keys.toSet()
 
     override fun <T : Any> put(key: AttributeKey<T>, value: T) {
-        attributes.put(key, value)
+        attributes[key] = value
     }
 
     override fun contains(key: AttributeKey<*>): Boolean {

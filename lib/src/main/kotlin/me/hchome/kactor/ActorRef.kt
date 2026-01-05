@@ -1,5 +1,7 @@
 package me.hchome.kactor
 
+import kotlin.io.path.Path
+import kotlin.io.path.name
 import kotlin.reflect.KClass
 
 /**
@@ -8,57 +10,37 @@ import kotlin.reflect.KClass
  */
 data class ActorRef(
     /**
-     * the actor handler class
-     */
-    val handler: KClass<out ActorHandler>,
-    /**
      * the actor id
      */
     val actorId: String,
 ) {
-    /**
-     * the actor node id
-     */
-    var node: String = ""
-        internal set
+    private val path = Path(actorId)
 
-    /**
-     * the actor is local or not
-     */
-    val isLocal: Boolean
-        get() = node.isBlank()
-
-    /**
-     * the actor is remote or not
-     */
-    val isRemote: Boolean
-        get() = !isLocal
-
-    val rawId: String
-        get() = actorId.substringAfterLast('/')
+    val name: String
+        get() = path.name
 
     val hasParent: Boolean
-        get() = actorId.contains('/')
+        get() = path.parent != null
 
     val lastParentId: String
-        get() = actorId.substringBeforeLast('/').substringAfterLast('/')
+        get() = path.parent?.name ?: ""
+
+    fun childOf(id: String) = of(path.resolve(id).toString())
+
+    fun parentOf() = of(path.parent?.toString() ?: "")
 
     companion object {
         @JvmStatic
-        val EMPTY = ActorRef(ActorHandler::class, "")
+        val EMPTY = ActorRef( "")
 
         @JvmStatic
-        fun <T : ActorHandler> ofService(clazz: KClass<T>) = ActorRef(clazz, "$clazz")
+        fun <T : ActorHandler> ofService(clazz: KClass<T>) = of("$clazz")
 
         @JvmStatic
-        inline fun <reified T : ActorHandler> ofService() = ActorRef(T::class, "${T::class}")
+        inline fun <reified T : ActorHandler> ofService() = ofService(T::class)
 
         @JvmStatic
-        inline fun <reified T : ActorHandler> of(actorId: String) = ActorRef(T::class, actorId)
-
-        @JvmStatic
-        inline fun <reified T : ActorHandler> childOf(parent: ActorRef, id: String) =
-            if (parent.isEmpty()) of<T>(id) else of<T>("${parent.actorId}/$id")
+        fun of(actorId: String) = ActorRef(actorId)
     }
 }
 
