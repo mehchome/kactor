@@ -1,14 +1,18 @@
 package me.hchome.kactor.impl
 
+import jdk.jfr.internal.OldObjectSample.emit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.hchome.kactor.ActorContext
 import me.hchome.kactor.ActorHandler
@@ -18,7 +22,6 @@ import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 
@@ -29,7 +32,7 @@ import kotlin.time.Duration
 internal data class ActorContextImpl(
     private val self: BaseActor,
     private val system: ActorSystem,
-    internal val scope: CoroutineScope
+    private val scope: CoroutineScope
 ) : ActorContext,
     Attributes by AttributesImpl() {
 
@@ -194,20 +197,28 @@ internal data class ActorContextImpl(
     }
 
     override suspend fun <T : ActorHandler> newService(kClass: KClass<T>): ActorRef = system.serviceOfSuspend(kClass)
-}
 
-/**
- * High function proxy launch in coroutine scope to prevent coroutine accidentally leaked
- */
-fun <T> Flow<T>.launchIn(context: ActorContext): Job {
-    val context = context as? ActorContextImpl ?: throw ClassCastException("ActorContextImpl expected")
-    return this.launchIn(context.scope)
-}
+    override fun launch(
+        start: CoroutineStart,
+        block: suspend CoroutineScope.() -> Unit
+    ): Job = scope.launch(start = start, block = block)
 
-/**
- * High function proxy share in coroutine scope to prevent coroutine accidentally leaked
- */
-fun <T> Flow<T>.shareIn(context: ActorContext, started: SharingStarted, replay: Int = 0): Flow<T> {
-    val context = context as? ActorContextImpl ?: throw ClassCastException("ActorContextImpl expected")
-    return this.shareIn(context.scope, started, replay)
+    override fun <T> async(
+        start: CoroutineStart,
+        block: suspend CoroutineScope.() -> T
+    ): Deferred<T> = scope.async(start = start, block = block)
+
+    override fun <T> share(
+        flow: Flow<T>,
+        started: SharingStarted,
+        replay: Int
+    ): SharedFlow<T> = flow.shareIn(scope, started, replay)
+
+    override fun <T> state(
+        flow: Flow<T>,
+        stated: SharingStarted,
+        initValue: T
+    ): StateFlow<T> = flow.stateIn(scope, stated, initValue)
+
+    override suspend fun <T> state(flow: Flow<T>): StateFlow<T> = flow.stateIn(scope)
 }

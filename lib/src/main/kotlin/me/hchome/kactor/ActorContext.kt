@@ -3,9 +3,19 @@
 package me.hchome.kactor
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.shareIn
+import me.hchome.kactor.impl.ActorContextImpl
 import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 import kotlin.time.Duration
@@ -22,6 +32,32 @@ import kotlin.uuid.Uuid
  * @see ActorHandler
  */
 interface ActorContext : Attributes {
+
+    /**
+     * launch suspend block in actor scope
+     */
+    fun launch(start: CoroutineStart = CoroutineStart.DEFAULT, block: suspend CoroutineScope.() -> Unit): Job
+
+    /**
+     * launch suspend block in actor scope and return callback when it was completed
+     */
+    fun <T> async(start: CoroutineStart = CoroutineStart.DEFAULT, block: suspend CoroutineScope.() -> T): Deferred<T>
+
+    /**
+     * convert a flow to a hot shared flow
+     */
+    fun <T> share(flow: Flow<T>, started: SharingStarted, replay: Int = 0): SharedFlow<T>
+
+    /**
+     * convert a flow to a hot state flow
+     */
+    fun <T> state(flow: Flow<T>, stated: SharingStarted, initValue: T): StateFlow<T>
+
+    /**
+     * convert a state to a hot flow
+     */
+    suspend fun <T> state(flow: Flow<T>): StateFlow<T>
+
     /**
      * Actor reference
      * @see ActorRef
@@ -225,6 +261,19 @@ suspend inline fun <reified T : ActorHandler> ActorContext.newService(): ActorRe
 inline fun <reified T : ActorHandler> ActorContext.sendService(message: Any) = sendService(T::class, message)
 
 inline fun <reified T : ActorHandler> ActorContext.getService() = getService(T::class)
+
+/**
+ * High function proxy launch in coroutine scope to prevent coroutine accidentally leaked
+ */
+fun <T> Flow<T>.launchIn(context: ActorContext): Job {
+    return context.launch { collect() }
+}
+
+/**
+ * High function proxy share in coroutine scope to prevent coroutine accidentally leaked
+ */
+fun <T> Flow<T>.shareIn(context: ActorContext, started: SharingStarted, replay: Int = 0): Flow<T> =
+    context.share(this, started, replay)
 
 
 /**
