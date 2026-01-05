@@ -21,7 +21,7 @@ import kotlin.uuid.Uuid
  * @see ActorContext
  * @see ActorHandler
  */
-interface ActorContext : Attributes, CoroutineScope {
+interface ActorContext : Attributes {
     /**
      * Actor reference
      * @see ActorRef

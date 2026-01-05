@@ -1,8 +1,15 @@
 package me.hchome.kactor.impl
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.launch
 import me.hchome.kactor.ActorContext
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
@@ -10,6 +17,8 @@ import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 
@@ -17,8 +26,12 @@ import kotlin.time.Duration
  * Implementation of [ActorContext] that provides access to the actor system and actor's context.
  * Open BaseActor's CoroutineScope to use it in the actor handler's methods.
  */
-internal data class ActorContextImpl(private val self: BaseActor, private val system: ActorSystem, private val scope: CoroutineScope) : ActorContext,
-    Attributes by AttributesImpl(), CoroutineScope by scope {
+internal data class ActorContextImpl(
+    private val self: BaseActor,
+    private val system: ActorSystem,
+    internal val scope: CoroutineScope
+) : ActorContext,
+    Attributes by AttributesImpl() {
 
     override fun getService(kClass: KClass<out ActorHandler>): ActorRef = system.getService(kClass)
 
@@ -183,3 +196,18 @@ internal data class ActorContextImpl(private val self: BaseActor, private val sy
     override suspend fun <T : ActorHandler> newService(kClass: KClass<T>): ActorRef = system.serviceOfSuspend(kClass)
 }
 
+/**
+ * High function proxy launch in coroutine scope to prevent coroutine accidentally leaked
+ */
+fun <T> Flow<T>.launchIn(context: ActorContext): Job {
+    val context = context as? ActorContextImpl ?: throw ClassCastException("ActorContextImpl expected")
+    return this.launchIn(context.scope)
+}
+
+/**
+ * High function proxy share in coroutine scope to prevent coroutine accidentally leaked
+ */
+fun <T> Flow<T>.shareIn(context: ActorContext, started: SharingStarted, replay: Int = 0): Flow<T> {
+    val context = context as? ActorContextImpl ?: throw ClassCastException("ActorContextImpl expected")
+    return this.shareIn(context.scope, started, replay)
+}
