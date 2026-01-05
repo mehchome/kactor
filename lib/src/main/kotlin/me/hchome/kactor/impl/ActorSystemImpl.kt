@@ -85,10 +85,8 @@ internal class ActorSystemImpl(
 
     override fun getService(kClass: KClass<out ActorHandler>): ActorRef {
         return all().firstOrNull {
-            it.ref.handler == kClass &&
-                    it.ref.actorId == "$kClass" &&
-                    it.singleton &&
-                    kClass.isInstance(it.ref.handler)
+            it.ref.actorId == "$kClass" &&
+                    it.singleton
         }?.ref ?: ActorRef.EMPTY
     }
 
@@ -109,7 +107,8 @@ internal class ActorSystemImpl(
         singleton: Boolean,
         cause: Throwable
     ) {
-        if(LOGGER.isDebugEnabled) {
+        val actor = this[child]
+        if (LOGGER.isDebugEnabled) {
             LOGGER.debug("Supervise actor ${child.actorId} with restart strategy ${restartStrategy.javaClass.simpleName}")
         }
         when (restartStrategy) {
@@ -117,9 +116,9 @@ internal class ActorSystemImpl(
                 val attributes = snapshot(child)
                 destroyActor(child)
                 val new = if (singleton) {
-                    serviceOfSuspend(child.handler)
+                    serviceOfSuspend(actor.handlerClass)
                 } else {
-                    actorOfSuspend(child.rawId, ActorRef.EMPTY, child.handler)
+                    actorOfSuspend(child.name, ActorRef.EMPTY, actor.handlerClass)
                 }
                 if (attributes != null) {
                     recover(new, attributes)
@@ -135,9 +134,9 @@ internal class ActorSystemImpl(
                 destroyActor(child)
                 delay(max)
                 val new = if (singleton) {
-                    serviceOfSuspend(child.handler)
+                    serviceOfSuspend(actor.handlerClass)
                 } else {
-                    actorOfSuspend(child.rawId, ActorRef.EMPTY, child.handler)
+                    actorOfSuspend(child.name, ActorRef.EMPTY, actor.handlerClass)
                 }
                 if (attributes != null) {
                     recover(new, attributes)
@@ -161,7 +160,7 @@ internal class ActorSystemImpl(
             throw ActorSystemException("Parent actor is a singleton actor")
         }
 
-        val ref = ActorRef(kClass, actorId)
+        val ref = ActorRef(actorId)
         if (contains(ref)) {
             if (singleton) {
                 return ref
@@ -176,7 +175,7 @@ internal class ActorSystemImpl(
         )
         this[actor.ref] = actor
         this@ActorSystemImpl.notifySystem(
-            actor.ref, ActorRef.Companion.EMPTY, "Actor created",
+            actor.ref, ActorRef.EMPTY, "Actor created",
             ActorSystemNotificationMessage.NotificationType.ACTOR_CREATED
         )
         return actor.ref
@@ -186,7 +185,7 @@ internal class ActorSystemImpl(
         this.remove(actorRef)?.dispose()
         notifySystem(
             actorRef,
-            ActorRef.Companion.EMPTY,
+            ActorRef.EMPTY,
             "Actor destroyed",
             ActorSystemNotificationMessage.NotificationType.ACTOR_DESTROYED
         )
