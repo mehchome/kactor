@@ -3,9 +3,9 @@
 package me.hchome.kactor.impl
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CompletableJob
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineExceptionHandler
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.DisposableHandle
 import kotlinx.coroutines.Job
@@ -21,19 +21,17 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import me.hchome.kactor.Actor
 import me.hchome.kactor.ActorConfig
+import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorHandlerFactory
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
-import me.hchome.kactor.SupervisorStrategy.*
 import me.hchome.kactor.Supervisor
 import me.hchome.kactor.TaskInfo
-import me.hchome.kactor.isNotEmpty
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import kotlin.collections.forEach
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.reflect.KClass
 import kotlin.time.Duration
@@ -45,30 +43,25 @@ private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, Co
 
 
 internal class BaseActor(
-    dispatcher: CoroutineDispatcher,
+    val dispatcher: CoroutineDispatcher,
     override val handlerClass: KClass<out ActorHandler>,
     factory: ActorHandlerFactory,
     val actorSystem: ActorSystem,
     val id: String,
     val actorConfig: ActorConfig,
     override val singleton: Boolean,
-    val parentActor: Actor? = null
+    val systemJob: Job,
+    val parentActor: BaseActor? = null
 ) : Actor,
     Supervisor,
     DisposableHandle {
-
-    private val scope = CoroutineScope(dispatcher + SupervisorJob())
+    var actorJob = createActorJob()
+    private var context = createContext()
 
     private val mailbox =
         Channel<MessageWrapper>(actorConfig.capacity, actorConfig.onBufferOverflow, ::undeliveredMessageHandler)
 
     private var mailBoxJob: Job? = null
-
-    private val handlerScope: ActorHandlerScope = { h: ActorHandler, message: Any, sender: ActorRef ->
-        context(context) {
-            h.onMessage(message, sender)
-        }
-    }
 
     private val taskExceptionHandler = CoroutineExceptionHandler { ctx, e ->
         actorSystem.notifySystem(
@@ -87,28 +80,22 @@ internal class BaseActor(
     val parent: ActorRef
         get() = parentActor?.ref ?: ActorRef.EMPTY
 
-    val childrenRefs: MutableSet<ActorRef> = mutableSetOf()
-    private val context = ActorContextImpl(this@BaseActor, actorSystem, scope)
 
-
-    val hasParent: Boolean
-        get() = parent.isNotEmpty()
-
-    override fun contains(ref: ActorRef): Boolean = ref in childrenRefs
+    override fun contains(ref: ActorRef): Boolean = this@BaseActor.ref.isParentOf(ref)
 
     val handler: ActorHandler by lazy {
         factory.getBean(handlerClass)
     }
 
     init {
-        if (parentActor != null && parentActor is BaseActor) {
-            parentActor.addChild(this.ref)
-        }
         processingMessage()
     }
 
+    override suspend fun restart() {
+    }
+
     override fun send(message: Any, sender: ActorRef) {
-        scope.launch {
+        context.launch {
             try {
                 withTimeout(1.minutes) {
                     mailbox.send(SetStatusMessageWrapperImpl(message, sender))
@@ -124,7 +111,7 @@ internal class BaseActor(
     }
 
     override fun <T : Any> ask(message: Any, sender: ActorRef, callback: CompletableDeferred<in T>) {
-        scope.launch {
+        context.launch {
             try {
                 withTimeout(1.minutes) {
                     mailbox.send(GetStatusMessageWrapperImpl(message, sender, callback))
@@ -138,14 +125,6 @@ internal class BaseActor(
                 )
             }
         }
-    }
-
-    fun addChild(child: ActorRef) {
-        childrenRefs.add(child)
-    }
-
-    fun removeChild(child: ActorRef) {
-        childrenRefs.remove(child)
     }
 
     override fun recover(attributes: Attributes) {
@@ -162,7 +141,7 @@ internal class BaseActor(
         block: suspend ActorHandler.(String) -> Unit
     ): Job {
         val taskInfo = TaskInfo.Task(initDelay, block)
-        return scope.launch(taskInfo + taskExceptionHandler) {
+        return context.actorScope.launch(taskInfo + taskExceptionHandler) {
             delay(initDelay)
             block(handler, taskInfo.id)
         }
@@ -175,7 +154,7 @@ internal class BaseActor(
         block: suspend ActorHandler.(String) -> Unit
     ): Job {
         val taskInfo = TaskInfo.Schedule(period, initDelay, block)
-        return scope.launch(taskInfo + taskExceptionHandler) {
+        return context.actorScope.launch(taskInfo + taskExceptionHandler) {
             delay(initDelay)
             while (isActive) {
                 block(handler, taskInfo.id)
@@ -196,7 +175,7 @@ internal class BaseActor(
 
     @Suppress("UNCHECKED_CAST")
     private fun processingMessage() {
-        mailBoxJob = scope.launch {
+        mailBoxJob = context.launch {
             context(context) {
                 try {
                     handler.preStart()
@@ -215,7 +194,11 @@ internal class BaseActor(
                         } catch (e: CancellationException) {
                             LOGGER.debug("Actor cancelled: {}", ref, e)
                         } catch (e: Throwable) {
-                            fatalHandling(e, message, sender)
+                            actorConfig.supervisorStrategy.processFailure(
+                                ActorFailure(
+                                    actorSystem, this@BaseActor.ref, sender, message, e
+                                )
+                            )
                         }
                     }
                 } finally {
@@ -244,60 +227,60 @@ internal class BaseActor(
         singleton: Boolean,
         cause: Throwable,
     ) {
-        val config = this.actorConfig
-        when (config.supervisorStrategy) {
-            is OneForOne -> {
-                val attributes = snapshot(child)
-                actorSystem.destroyActor(child)
-                val ref = actorSystem.actorOfSuspend(child.name, ref, handlerClass)
-                if (attributes != null) {
-                    recover(ref, attributes)
-                }
-            }
-
-            is AllForOne -> {
-                val children = this.childrenRefs.toSet()
-                children.forEach {
-                    actorSystem.destroyActor(it)
-                }
-                childrenRefs.clear()
-                children.forEach {
-                    val attr = snapshot(it)
-                    val childRef = actorSystem.actorOfSuspend(it.name, ref, handlerClass)
-                    if (attr != null) {
-                        recover(childRef, attr)
-                    }
-                }
-            }
-
-            is Resume -> {}
-            is Stop -> actorSystem.destroyActor(child)
-            is Escalate -> fatalHandling(cause, "Bubble up the supervisor", ref)
-            is Backoff -> {
-                val (init, max) = config.supervisorStrategy
-                delay(init)
-                actorSystem.destroyActor(child)
-                delay(max)
-                actorSystem.actorOfSuspend(child.name, ref, handlerClass)
-            }
-        }
+//        val config = this.actorConfig
+//        when (config.supervisorStrategy) {
+//            is OneForOne -> {
+//                val attributes = snapshot(child)
+//                actorSystem.destroyActor(child)
+//                val ref = actorSystem.actorOfSuspend(child.name, ref, handlerClass)
+//                if (attributes != null) {
+//                    recover(ref, attributes)
+//                }
+//            }
+//
+//            is AllForOne -> {
+//                val children = this.childrenRefs.toSet()
+//                children.forEach {
+//                    actorSystem.destroyActor(it)
+//                }
+//                childrenRefs.clear()
+//                children.forEach {
+//                    val attr = snapshot(it)
+//                    val childRef = actorSystem.actorOfSuspend(it.name, ref, handlerClass)
+//                    if (attr != null) {
+//                        recover(childRef, attr)
+//                    }
+//                }
+//            }
+//
+//            is Resume -> {}
+//            is Stop -> actorSystem.destroyActor(child)
+//            is Escalate -> fatalHandling(cause, "Bubble up the supervisor", ref)
+//            is Backoff -> {
+//                val (init, max) = config.supervisorStrategy
+//                delay(init)
+//                actorSystem.destroyActor(child)
+//                delay(max)
+//                actorSystem.actorOfSuspend(child.name, ref, handlerClass)
+//            }
+//        }
 
     }
 
-    private suspend fun fatalHandling(e: Throwable, message: Any, sender: ActorRef) {
-        if (LOGGER.isDebugEnabled) {
-            LOGGER.error("Fatal message: $message", e)
-        }
-        actorSystem.notifySystem(
-            sender, ref, "Fatal message: $message",
-            notificationType = ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, e
-        )
-        if (parent.isNotEmpty() && parentActor != null) {
-            parentActor.supervise(ref, singleton, e)
-        } else {
-            actorSystem.supervise(ref, singleton, e)
-        }
-    }
+//    private suspend fun fatalHandling(e: Throwable, message: Any, sender: ActorRef) {
+//        if (LOGGER.isDebugEnabled) {
+//            LOGGER.error("Fatal message: $message", e)
+//        }
+//        actorSystem.notifySystem(
+//            sender, ref, "Fatal message: $message",
+//            notificationType = ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, e
+//        )
+//        if (parent.isNotEmpty() && parentActor != null) {
+//            parentActor.supervise(ref, singleton, e)
+//        } else {
+//            actorSystem.supervise(ref, singleton, e)
+//        }
+//    }
 
 
     private interface MessageWrapper {
@@ -316,6 +299,13 @@ internal class BaseActor(
         val callback: CompletableDeferred<in T>
     ) : MessageWrapper
 
+    private fun createContext() = ActorContextImpl(this@BaseActor, actorSystem, dispatcher, createActorJob())
+
+    private fun createActorJob(): Job = when (parentActor) {
+        null -> SupervisorJob(systemJob)
+        else -> SupervisorJob(parentActor.actorJob)
+    }
+
     @OptIn(DelicateCoroutinesApi::class)
     override fun dispose() {
         // stop mailbox
@@ -323,18 +313,18 @@ internal class BaseActor(
         mailBoxJob?.cancel()
         handler.preDestroy()
         // cancel all jobs
-        scope.cancel()
-
-        if (childrenRefs.isNotEmpty()) {
-            val children = childrenRefs.toSet() // copy a
-            for (child in children) {
-                actorSystem.destroyActor(child)
-            }
-        }
-
-        if (parentActor != null && parentActor is BaseActor) {
-            parentActor.removeChild(this.ref)
-        }
+        context.actorScope.cancel()
+//
+//        if (childrenRefs.isNotEmpty()) {
+//            val children = childrenRefs.toSet() // copy a
+//            for (child in children) {
+//                actorSystem.destroyActor(child)
+//            }
+//        }
+//
+//        if (parentActor != null && parentActor is BaseActor) {
+//            parentActor.removeChild(this.ref)
+//        }
     }
 
     companion object {
@@ -360,5 +350,6 @@ internal fun createActor(
     id: String,
     actorConfig: ActorConfig,
     singleton: Boolean,
-    parentActor: Actor?
-): BaseActor = BaseActor(dispatcher, kClass, factory, actorSystem, id, actorConfig, singleton, parentActor)
+    systemJob: Job,
+    parentActor: BaseActor?,
+): BaseActor = BaseActor(dispatcher, kClass, factory, actorSystem, id, actorConfig, singleton, systemJob, parentActor)

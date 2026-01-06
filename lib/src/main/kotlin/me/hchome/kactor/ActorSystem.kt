@@ -18,14 +18,8 @@ import kotlin.time.Duration
  * @see Actor
  */
 @JvmDefaultWithCompatibility
-interface ActorSystem : Supervisor, ActorHandlerRegistry, DisposableHandle {
+interface ActorSystem : Supervisor, ActorRegistry, ActorHandlerRegistry, DisposableHandle {
     val notifications: Flow<ActorSystemNotificationMessage>
-
-    /**
-     * Check if an actor exists
-     * @param actorRef actor reference
-     */
-    operator fun contains(actorRef: ActorRef): Boolean
 
     /**
      * create an actor
@@ -104,7 +98,12 @@ interface ActorSystem : Supervisor, ActorHandlerRegistry, DisposableHandle {
      * @param timeout timeout
      * @return deferred result
      */
-    fun <T : Any> ask(actorRef: ActorRef, sender: ActorRef, message: Any, timeout: Duration = Duration.INFINITE): Deferred<T>
+    fun <T : Any> ask(
+        actorRef: ActorRef,
+        sender: ActorRef,
+        message: Any,
+        timeout: Duration = Duration.INFINITE
+    ): Deferred<T>
 
     /**
      * get a service actor reference
@@ -121,6 +120,10 @@ interface ActorSystem : Supervisor, ActorHandlerRegistry, DisposableHandle {
         notificationType: ActorSystemNotificationMessage.NotificationType,
         throwable: Throwable? = null
     )
+
+    suspend fun processFailure(ref: ActorRef, sender: ActorRef, message: Any, strategy: SupervisorStrategy)
+
+    fun shutdownGracefully()
 
     companion object {
 
@@ -148,13 +151,19 @@ interface ActorSystem : Supervisor, ActorHandlerRegistry, DisposableHandle {
     }
 }
 
-suspend inline fun <reified T> ActorSystem.actorOfSuspend(id: String? = null, parent: ActorRef = ActorRef.EMPTY): ActorRef where T : ActorHandler =
+suspend inline fun <reified T> ActorSystem.actorOfSuspend(
+    id: String? = null,
+    parent: ActorRef = ActorRef.EMPTY
+): ActorRef where T : ActorHandler =
     actorOfSuspend(id, parent, T::class)
 
 suspend inline fun <reified T> ActorSystem.serviceOfSuspend(): ActorRef where T : ActorHandler =
     serviceOfSuspend(T::class)
 
-inline fun <reified T> ActorSystem.actorOf(id: String? = null, parent: ActorRef = ActorRef.EMPTY): ActorRef where T : ActorHandler =
+inline fun <reified T> ActorSystem.actorOf(
+    id: String? = null,
+    parent: ActorRef = ActorRef.EMPTY
+): ActorRef where T : ActorHandler =
     actorOf(id, parent, T::class)
 
 inline fun <reified T> ActorSystem.serviceOf(): ActorRef where T : ActorHandler = serviceOf(T::class)

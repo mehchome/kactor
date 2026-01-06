@@ -13,7 +13,10 @@ import kotlin.time.Duration
  *
  */
 sealed interface SupervisorStrategy {
-
+    suspend fun processFailure(failure: ActorFailure) {
+        val system = failure.system
+        system.processFailure(failure.ref, failure.sender, failure.message, this)
+    }
 
     object OneForOne : SupervisorStrategy
     object AllForOne : SupervisorStrategy
@@ -21,6 +24,22 @@ sealed interface SupervisorStrategy {
     object Resume : SupervisorStrategy
     object Stop : SupervisorStrategy
     object Escalate : SupervisorStrategy
+}
+
+suspend fun SupervisorStrategy.onFailure(failure: ActorFailure) {
+    val system = failure.system
+    system.notifySystem(
+        failure.sender,
+        failure.ref,
+        "Actor failure",
+        ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL,
+        failure.cause
+    )
+    processFailure(failure)
+}
+
+internal fun getSupervisedActor(failure: ActorFailure): Actor {
+    return failure.system[failure.ref]
 }
 
 interface Supervisor {

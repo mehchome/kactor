@@ -12,10 +12,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
 import me.hchome.kactor.ActorHandler
@@ -37,7 +39,6 @@ import me.hchome.kactor.SupervisorStrategy.Stop
 import me.hchome.kactor.isNotEmpty
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 import kotlin.uuid.ExperimentalUuidApi
@@ -55,18 +56,27 @@ internal class ActorSystemImpl(
     ActorSystem,
     ActorHandlerRegistry by ActorHandlerRegistryImpl(dispatcher, handlerFactory),
     ActorRegistry by actorRegistry,
-    CoroutineScope,
     DisposableHandle {
-    private val job = SupervisorJob()
-    override val coroutineContext: CoroutineContext = Dispatchers.Default + job
+    private val systemJob = SupervisorJob()
+    private val systemScope = CoroutineScope(systemJob + Dispatchers.Default)
     private val mutex = Mutex()
-    internal val _notifications = MutableSharedFlow<ActorSystemNotificationMessage>(0, 10, BufferOverflow.DROP_OLDEST)
+    internal val _notifications = MutableSharedFlow<ActorSystemNotificationMessage>(0, 64, BufferOverflow.DROP_OLDEST)
     override val notifications: Flow<ActorSystemNotificationMessage>
         get() = _notifications
 
-    override fun dispose() {
+    override fun dispose(): Unit = runBlocking {
+        systemJob.cancelAndJoin()
         clear()
-        coroutineContext.cancel()
+        systemScope.cancel()
+    }
+
+    override suspend fun processFailure(
+        ref: ActorRef,
+        sender: ActorRef,
+        message: Any,
+        strategy: SupervisorStrategy
+    ) {
+
     }
 
     override suspend fun <T : ActorHandler> actorOfSuspend(
@@ -145,6 +155,12 @@ internal class ActorSystemImpl(
         }
     }
 
+    override fun shutdownGracefully() = runBlocking {
+        systemJob.cancelAndJoin()
+        clear()
+        systemScope.cancel()
+    }
+
     private fun <T> actorOfSuspend(
         id: String?,
         singleton: Boolean,
@@ -171,7 +187,7 @@ internal class ActorSystemImpl(
 
         val actor = createActor(
             actorDispatcher, kClass, config.factory, this@ActorSystemImpl, actorId, config.config,
-            singleton, parentActor
+            singleton, systemJob, parentActor as BaseActor
         )
         this[actor.ref] = actor
         this@ActorSystemImpl.notifySystem(
@@ -196,7 +212,7 @@ internal class ActorSystemImpl(
     }
 
     override fun <T : Any> ask(actorRef: ActorRef, sender: ActorRef, message: Any, timeout: Duration): Deferred<T> =
-        async {
+        systemScope.async {
             val actor = this@ActorSystemImpl[actorRef]
             val deferred = CompletableDeferred<T>()
             try {

@@ -9,8 +9,9 @@ import kotlin.reflect.KClass
  * @see ActorSystem
  */
 interface Actor : Supervisor, DisposableHandle {
-
+    
     val ref: ActorRef
+
     val handlerClass: KClass<out ActorHandler>
 
     val singleton: Boolean
@@ -32,6 +33,11 @@ interface Actor : Supervisor, DisposableHandle {
      * @return deferred result
      */
     fun <T : Any> ask(message: Any, sender: ActorRef = ActorRef.EMPTY, callback: CompletableDeferred<in T>)
+
+    /**
+     * Restart actor
+     */
+    suspend fun restart()
 
     /**
      * Recover actor attributes

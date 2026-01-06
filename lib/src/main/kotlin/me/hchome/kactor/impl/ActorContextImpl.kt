@@ -1,5 +1,7 @@
 package me.hchome.kactor.impl
 
+import kotlinx.coroutines.CompletableJob
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -29,9 +31,12 @@ import kotlin.time.Duration
 internal data class ActorContextImpl(
     private val self: BaseActor,
     private val system: ActorSystem,
-    private val scope: CoroutineScope
+    private val dispatcher: CoroutineDispatcher,
+    val actorJob: CompletableJob
 ) : ActorContext,
     Attributes by AttributesImpl() {
+
+    val actorScope = CoroutineScope(actorJob + dispatcher)
 
     override fun getService(kClass: KClass<out ActorHandler>): ActorRef = system.getService(kClass)
 
@@ -42,9 +47,10 @@ internal data class ActorContextImpl(
         get() = self.ref
 
     override val parent: ActorRef
-        get() = self.parent
+        get() = self.ref.parentOf()
+
     override val children: Set<ActorRef>
-        get() = self.childrenRefs.toSet()
+        get() = system.childReferences(self.ref)
 
     override fun <T : ActorHandler> sendService(kClass: KClass<out T>, message: Any) {
         val ref = ActorRef.ofService(kClass)
@@ -70,7 +76,7 @@ internal data class ActorContextImpl(
             )
             return
         }
-        if (self.childrenRefs.isEmpty()) {
+        if (children.isEmpty()) {
             system.notifySystem(
                 self.ref, ActorRef.EMPTY,
                 "Send a message to an empty children: $message",
@@ -78,20 +84,20 @@ internal data class ActorContextImpl(
             )
             return
         }
-        self.childrenRefs.forEach {
+        children.forEach {
             system.send(it, self.ref, message)
         }
     }
 
     override fun getChild(id: String): ActorRef {
-        return children.firstOrNull { it.actorId.endsWith(id) } ?: ActorRef.EMPTY
+        return system.childReferences(self.ref).firstOrNull { it.name.contentEquals(id) } ?: ActorRef.EMPTY
     }
 
     override fun sendChild(childRef: ActorRef, message: Any) {
         if (self.singleton) {
             return
         }
-        self.childrenRefs.firstOrNull { it == childRef }?.also {
+        children.firstOrNull { it == childRef }?.also {
             system.send(it, self.ref, message)
         } ?: run {
             system.notifySystem(
@@ -103,8 +109,8 @@ internal data class ActorContextImpl(
     }
 
     override fun sendParent(message: Any) {
-        if (self.hasParent) {
-            system.send(self.parent, self.ref, message)
+        if (self.ref.hasParent) {
+            system.send(self.ref.parentOf(), self.ref, message)
         } else {
             system.notifySystem(
                 self.ref, ActorRef.EMPTY,
@@ -132,7 +138,7 @@ internal data class ActorContextImpl(
 
 
     override fun stopChildren() {
-        self.childrenRefs.forEach {
+        children.forEach {
             system.destroyActor(it)
         }
     }
@@ -198,24 +204,24 @@ internal data class ActorContextImpl(
     override fun launch(
         start: CoroutineStart,
         block: suspend CoroutineScope.() -> Unit
-    ): Job = scope.launch(start = start, block = block)
+    ): Job = actorScope.launch(start = start, block = block)
 
     override fun <T> async(
         start: CoroutineStart,
         block: suspend CoroutineScope.() -> T
-    ): Deferred<T> = scope.async(start = start, block = block)
+    ): Deferred<T> = actorScope.async(start = start, block = block)
 
     override fun <T> share(
         flow: Flow<T>,
         started: SharingStarted,
         replay: Int
-    ): SharedFlow<T> = flow.shareIn(scope, started, replay)
+    ): SharedFlow<T> = flow.shareIn(actorScope, started, replay)
 
     override fun <T> state(
         flow: Flow<T>,
         stated: SharingStarted,
         initValue: T
-    ): StateFlow<T> = flow.stateIn(scope, stated, initValue)
+    ): StateFlow<T> = flow.stateIn(actorScope, stated, initValue)
 
-    override suspend fun <T> state(flow: Flow<T>): StateFlow<T> = flow.stateIn(scope)
+    override suspend fun <T> state(flow: Flow<T>): StateFlow<T> = flow.stateIn(actorScope)
 }
