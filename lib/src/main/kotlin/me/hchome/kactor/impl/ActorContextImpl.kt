@@ -32,11 +32,11 @@ internal data class ActorContextImpl(
     private val self: BaseActor,
     private val system: ActorSystem,
     private val dispatcher: CoroutineDispatcher,
-    val actorJob: CompletableJob
+    internal val actorJob: Job
 ) : ActorContext,
     Attributes by AttributesImpl() {
 
-    val actorScope = CoroutineScope(actorJob + dispatcher)
+    internal val actorScope = CoroutineScope(actorJob + dispatcher)
 
     override fun getService(kClass: KClass<out ActorHandler>): ActorRef = system.getService(kClass)
 
