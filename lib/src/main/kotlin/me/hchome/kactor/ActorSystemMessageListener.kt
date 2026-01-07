@@ -1,6 +1,7 @@
 package me.hchome.kactor
 
-interface ActorSystemMessageListener {
+@FunctionalInterface
+fun interface ActorSystemMessageListener {
 
     fun onMessage(message: ActorSystemNotificationMessage)
 }

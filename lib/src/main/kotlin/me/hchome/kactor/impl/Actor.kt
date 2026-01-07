@@ -14,6 +14,7 @@ import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystem
+import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.Supervisor
@@ -32,9 +33,10 @@ private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, Co
  * An actor is a business logic object that can receive messages and send messages to other actors.
  * @see ActorSystem
  */
-internal class Actor(
+class Actor internal constructor(
     val ref: ActorRef,
     val singleton: Boolean,
+    val domain: String,
     private val actorSystem: ActorSystem,
     private val supervisorStrategy: SupervisorStrategy,
     private val supervisor: Supervisor,
@@ -63,14 +65,22 @@ internal class Actor(
     fun send(message: Any, sender: ActorRef) {
         val result = mailbox.trySend(ActorEnvelope.SendActorEnvelope(message, sender))
         if (result.isFailure) {
-            // TODO: notify system
+            runtimeScope.launch {
+                withContext(NonCancellable) {
+                    supervisor.supervise(ref, sender, message, result.exceptionOrNull() ?: ActorSystemException("Unknown error"))
+                }
+            }
         }
     }
 
     fun <T : Any> ask(message: Any, sender: ActorRef, callback: CompletableDeferred<in T>) {
         val result = mailbox.trySend(ActorEnvelope.AskActorEnvelope(message, sender, callback))
         if (result.isFailure) {
-            // TODO: notify system
+            runtimeScope.launch {
+                withContext(NonCancellable) {
+                    supervisor.supervise(ref, sender, message, result.exceptionOrNull() ?: ActorSystemException("Unknown error"))
+                }
+            }
         }
     }
 

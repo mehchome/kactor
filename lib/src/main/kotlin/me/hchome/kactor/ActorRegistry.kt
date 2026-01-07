@@ -1,6 +1,7 @@
 package me.hchome.kactor
 
-import me.hchome.kactor.impl.Actor
+import me.hchome.kactor.SystemMessage.CreateActor
+import kotlin.reflect.KClass
 
 /**
  * Registry for managing actors in the actor system. This interface provides methods to
@@ -9,33 +10,62 @@ import me.hchome.kactor.impl.Actor
  * The registry ensures that actors can be referenced and interacted with efficiently
  * based on their unique identifiers (`ActorRef`).
  */
-interface ActorRegistry {
+interface ActorRegistry: ActorSystemInitializationListener {
 
-//    /**
-//     * Get all actor references in the registry
-//     */
-//    fun allReferences(): Set<ActorRef>
-//
-//    /**
-//     * Get all child actor references of a parent actor
-//     */
-//    fun childReferences(parent: ActorRef): Set<ActorRef> = allReferences().filter(parent::isParentOf).toSet()
-//
-//    /**
-//     * Get all actors in the registry
-//     */
-//    val all: Set<Actor>
-//
-//
-//    operator fun set(ref: ActorRef, actor: Actor)
-//
-//    operator fun get(ref: ActorRef): Actor
-//
-//    operator fun contains(ref: ActorRef): Boolean
-//
-//    fun remove(ref: ActorRef): Actor?
-//
-//    fun clear()
+    /**
+     * get all actors references
+     */
+    val all: Set<ActorRef>
+
+    /**
+     * get all singleton actors references
+     */
+    val allSingletons: Set<ActorRef>
+
+    /**
+     * check if an actor exists
+     */
+    operator fun contains(ref: ActorRef): Boolean = all.contains(ref)
+
+    /**
+     * get child actor references
+     */
+    fun childReferences(parent: ActorRef): Set<ActorRef> = all.filter(parent::isChildOf).toSet()
 
 
+    /**
+     * Get a singleton actor reference
+     */
+    fun getSingleton(kClass: KClass<out ActorHandler>): ActorRef
+
+
+    /**
+     * create an actor
+     */
+    fun createActor(message: CreateActor)
+
+    /**
+     * stop an actor
+     */
+    fun stopActor(ref: ActorRef)
+
+    /**
+     * restart an actor
+     */
+    fun restartActor(ref: ActorRef)
+
+    /**
+     * stop all actors
+     */
+    fun stopAllActors()
+
+    /**
+     * tell actor
+     */
+    suspend fun tell(tell: UserMessage.Tell)
+
+    /**
+     * Ask actor
+     */
+    suspend fun ask(ask: UserMessage.Ask)
 }

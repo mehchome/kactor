@@ -11,18 +11,18 @@ interface ActorHandlerRegistry {
     /**
      * register actor handler, with a meaningful domain name
      */
-    fun <T> register(
+    fun register(
         domain: String,
         dispatcher: CoroutineDispatcher? = null,
         config: ActorConfig = ActorConfig.DEFAULT,
         factory: ActorHandlerFactory? = null,
-        kClass: KClass<T>
-    ) where T : ActorHandler
+        kClass: KClass<out ActorHandler>
+    )
 
     /**
      * find the domain name by actor handler class
      */
-    fun <T> findName(kClass: KClass<T>): String? where T : ActorHandler
+    fun findName(kClass: KClass<out ActorHandler>): String?
 
     /**
      * Get config holder by domain
@@ -59,4 +59,9 @@ data class ActorHandlerConfigHolder(
     val config: ActorConfig,
     val factory: ActorHandlerFactory,
     val kClass: KClass<out ActorHandler>
-)
+) {
+    /**
+     * create a new actor handler instance
+     */
+    fun newActorHandler() = factory.getBean(kClass)
+}

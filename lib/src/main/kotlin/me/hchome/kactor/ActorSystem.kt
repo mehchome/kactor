@@ -3,7 +3,6 @@
 package me.hchome.kactor
 
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
 import me.hchome.kactor.impl.ActorSystemImpl
 import me.hchome.kactor.impl.LocalActorRegistry
@@ -12,11 +11,9 @@ import kotlin.time.Duration
 
 /**
  * An actor system is a container for actors. It is responsible for creating, destroying, and sending messages to actors.
- * @see Actor
  */
 @JvmDefaultWithCompatibility
-interface ActorSystem :  ActorHandlerRegistry {
-    val notifications: Flow<ActorSystemNotificationMessage>
+interface ActorSystem : ActorHandlerRegistry {
 
     /**
      * create an actor
@@ -140,6 +137,15 @@ interface ActorSystem :  ActorHandlerRegistry {
      */
     operator fun contains(ref: ActorRef): Boolean
 
+    /**
+     * add message listener to the actor system
+     */
+    fun addListener(listener: ActorSystemMessageListener)
+
+    /**
+     * add message listener to the actor system
+     */
+    operator fun plusAssign(listener: ActorSystemMessageListener) = addListener(listener)
 
     companion object {
 
@@ -150,18 +156,15 @@ interface ActorSystem :  ActorHandlerRegistry {
          *     Planned to support a clustering actor system in the future.
          * </p>
          *
-         * @param dispatcher coroutine dispatcher
          * @param factory actor handler factory
-         * @param registry actor registry, currently only support local registry
          * @return actor system
          */
         @JvmStatic
         fun createOrGet(
             factory: ActorHandlerFactory = DefaultActorHandlerFactory,
             strategy: SupervisorStrategy = SupervisorStrategy.OneForOne,
-        ): ActorSystem {
-            return ActorSystemImpl(factory, strategy)
-        }
+            registry: ActorRegistry = LocalActorRegistry()
+        ): ActorSystem = ActorSystemImpl(factory, strategy, registry)
     }
 }
 

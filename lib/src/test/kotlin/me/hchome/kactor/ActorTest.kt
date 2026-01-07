@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -60,7 +59,10 @@ class TestActor : ActorHandler, CoroutineScope by CoroutineScope(Dispatchers.IO)
                         val next = Random.nextInt(1, 5000)
                         scope.launch {
                             delay(next.milliseconds)
-                            context.sendChild(child, "${context.ref} follow message to $child: $message - next: $next ms")
+                            context.sendChild(
+                                child,
+                                "${context.ref} follow message to $child: $message - next: $next ms"
+                            )
                         }
                     }
                 } else if (context.isChild(sender) || context.isFormalChild(sender)) {
@@ -157,10 +159,9 @@ class TestActor3 : ActorHandler {
 
 data class B(val a: Int)
 
-abstract class TestHandler: ActorHandler
-{
+abstract class TestHandler : ActorHandler {
 
-    private lateinit var b:B
+    private lateinit var b: B
 
     context(context: ActorContext)
     override suspend fun preStart() {
@@ -173,6 +174,7 @@ abstract class TestHandler: ActorHandler
             testFunc()
         }
     }
+
     context(context: ActorContext, b: B)
     abstract fun testFunc()
 }
@@ -289,15 +291,10 @@ class ActorTest {
 
     @Test
     fun test7(): Unit = runBlocking {
-        val  ref = SYSTEM.actorOf<TestActor4>()
+        val ref = SYSTEM.actorOf<TestActor4>()
         SYSTEM.send(ref, "Hello")
         delay(4000)
     }
-
-
-
-
-
 
     companion object : CoroutineScope by CoroutineScope(Dispatchers.Default) {
 
@@ -306,23 +303,22 @@ class ActorTest {
         @JvmStatic
         @BeforeAll
         fun createSystem() {
-            SYSTEM = ActorSystem.createOrGet(Dispatchers.IO)
-            SYSTEM.register<TestActor>()
-            SYSTEM.register<TestActor2>()
-            SYSTEM.register<TestActor3>()
-            SYSTEM.register<TestActor4>()
+            SYSTEM = ActorSystem.createOrGet()
+            SYSTEM.register<TestActor>(TestActor::class.simpleName!!)
+            SYSTEM.register<TestActor2>(TestActor2::class.simpleName!!)
+            SYSTEM.register<TestActor3>(TestActor3::class.simpleName!!)
+            SYSTEM.register<TestActor4>(TestActor4::class.simpleName!!)
 
-            launch {
-                SYSTEM.notifications.collect { notification ->
-                    println(notification)
-                }
+            SYSTEM += ActorSystemMessageListener {
+                println(it)
             }
+            SYSTEM.start()
         }
 
         @AfterAll
         @JvmStatic
         fun cleanup() {
-            SYSTEM.dispose()
+            SYSTEM.shutdownGracefully()
             cancel()
         }
     }

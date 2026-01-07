@@ -77,20 +77,18 @@ class CoroutineTest {
         @JvmStatic
         @BeforeAll
         fun createSystem() {
-            SYSTEM = ActorSystem.createOrGet(Dispatchers.IO)
-            SYSTEM.register<TestActor>(config = ActorConfig(10, BufferOverflow.SUSPEND))
-            launch {
-                SYSTEM.notifications.collect { notification ->
-//                    println(notification)
-                    LOGGER.debug("{}", notification)
-                }
+            SYSTEM = ActorSystem.createOrGet()
+            SYSTEM.register<TestActor>("${TestActor::class}", config = ActorConfig(10, BufferOverflow.SUSPEND))
+            SYSTEM += ActorSystemMessageListener {
+                LOGGER.info(it.toString())
             }
+            SYSTEM.start()
         }
 
         @AfterAll
         @JvmStatic
         fun cleanup() {
-            SYSTEM.dispose()
+            SYSTEM.shutdownGracefully()
             cancel()
         }
     }

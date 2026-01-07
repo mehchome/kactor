@@ -1,5 +1,7 @@
 package me.hchome.kactor
 
+import kotlinx.coroutines.CompletableDeferred
+
 /**
  * Actor system messages
  */
@@ -8,13 +10,21 @@ sealed interface SystemMessage {
     /**
      * messages to create an actor
      */
-    data class CreateActor(val ref: ActorRef, val singleton: Boolean, val domain: String) : SystemMessage
+    data class CreateActor(
+        val id: String,
+        val parent: ActorRef,
+        val singleton: Boolean,
+        val domain: String,
+        val callback: CompletableDeferred<ActorRef>
+    ) : SystemMessage
 
     /**
-     * messages to supervise an actor
+     * messages to restart an actor
      */
-    data class SuperviseActor(val ref: ActorRef,
-                              val supervisor: Supervisor,
-                              val strategy: SupervisorStrategy) :
-        SystemMessage
+    data class RestartActor(val ref: ActorRef) : SystemMessage
+
+    /**
+     * messages to stop an actor
+     */
+    data class StopActor(val ref: ActorRef) : SystemMessage
 }

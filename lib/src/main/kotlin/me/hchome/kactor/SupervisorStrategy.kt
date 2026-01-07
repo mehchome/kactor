@@ -1,7 +1,5 @@
 package me.hchome.kactor
 
-import kotlin.time.Duration
-
 /**
  * Actors can be restarted by the supervisor strategy when they crash.
  * [OneForOne] restarts the child actor by default.
@@ -28,7 +26,8 @@ sealed interface SupervisorStrategy {
 
     object OneForOne : SupervisorStrategy {
         override suspend fun decide(failure: ActorFailure) {
-
+            val system = failure.system
+            system.processFailure(failure.ref, Decision.Restart)
         }
     }
 
@@ -40,11 +39,11 @@ sealed interface SupervisorStrategy {
                 val allChildReferences = system.childReferences(parentRef)
                 for (childRef in allChildReferences) {
                     // send restart messages to all children
+                    system.processFailure(childRef, Decision.Restart)
                 }
-            } else { // root actor fall back to OneForOne
+            } else { // the root actor falls back to OneForOne
                 OneForOne.decide(failure)
             }
-
         }
     }
 
@@ -56,7 +55,8 @@ sealed interface SupervisorStrategy {
 
     object Stop : SupervisorStrategy {
         override suspend fun decide(failure: ActorFailure) {
-
+            val system = failure.system
+            system.processFailure(failure.ref, Decision.Stop)
         }
     }
 

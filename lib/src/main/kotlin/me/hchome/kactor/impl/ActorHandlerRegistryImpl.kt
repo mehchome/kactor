@@ -19,13 +19,13 @@ internal class ActorHandlerRegistryImpl(
     private val registry: MutableMap<String, ActorHandlerConfigHolder> =
         ConcurrentHashMap<String, ActorHandlerConfigHolder>()
 
-    override fun <T> register(
+    override fun register(
         domain: String,
         dispatcher: CoroutineDispatcher?,
         config: ActorConfig,
         factory: ActorHandlerFactory?,
-        kClass: KClass<T>
-    ) where T : ActorHandler {
+        kClass: KClass<out ActorHandler>
+    )  {
         val dispatcher = dispatcher ?: defaultDispatcher
         val factory = factory ?: defaultFactory
         registry[domain] = ActorHandlerConfigHolder(domain, dispatcher, config, factory, kClass)
@@ -39,7 +39,7 @@ internal class ActorHandlerRegistryImpl(
         return registry.containsKey(domain)
     }
 
-    override fun <T : ActorHandler> findName(kClass: KClass<T>): String? {
+    override fun  findName(kClass: KClass<out ActorHandler>): String? {
         return registry.filter { it.value.kClass == kClass }.keys.firstOrNull()
     }
 }
