@@ -1,6 +1,5 @@
 package me.hchome.kactor
 
-import org.jetbrains.annotations.Contract
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.contract
 import kotlin.io.path.Path
@@ -30,15 +29,15 @@ data class ActorRef(
 
     fun childOf(id: String) = of(path.resolve(id).toString())
 
-    fun parentOf() = of(path.parent?.toString() ?: "")
+    fun parentOf() = path.parent?.let { of(it.toString()) } ?: EMPTY
 
-    fun isChildOf(ref: ActorRef) = ref.path == path.parent
+    fun isChildOf(ref: ActorRef) = this.isNotEmpty() && ref.isNotEmpty() && ref.path == path.parent
 
-    fun isParentOf(ref: ActorRef) = ref.path.parent == path
+    fun isParentOf(ref: ActorRef) = this.isNotEmpty() && ref.path.parent == path
 
     companion object {
         @JvmStatic
-        val EMPTY = ActorRef( "")
+        val EMPTY = ActorRef("")
 
         @JvmStatic
         fun <T : ActorHandler> ofService(clazz: KClass<T>) = of("$clazz")
@@ -55,14 +54,16 @@ data class ActorRef(
  * Check if an actor reference is empty
  */
 @OptIn(ExperimentalContracts::class)
-fun ActorRef?.isEmpty(): Boolean {
+fun ActorRef?.isNullOrEmpty(): Boolean {
     contract {
-        returns(false) implies (this@isEmpty != null)
+        returns(false) implies (this@isNullOrEmpty != null)
     }
-    return this == null || this == ActorRef.EMPTY || this.actorId.isEmpty()
+    return this == null || this.isEmpty()
 }
+
+fun ActorRef.isEmpty() = this == ActorRef.EMPTY
 
 /**
  * Check if an actor reference is not empty
  */
-fun ActorRef?.isNotEmpty(): Boolean = !this.isEmpty()
+fun ActorRef.isNotEmpty(): Boolean = !isEmpty()

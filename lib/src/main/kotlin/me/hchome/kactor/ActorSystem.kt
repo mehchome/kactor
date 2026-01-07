@@ -158,8 +158,9 @@ interface ActorSystem :  ActorHandlerRegistry {
         @JvmStatic
         fun createOrGet(
             factory: ActorHandlerFactory = DefaultActorHandlerFactory,
+            strategy: SupervisorStrategy = SupervisorStrategy.OneForOne,
         ): ActorSystem {
-            return ActorSystemImpl(factory)
+            return ActorSystemImpl(factory, strategy)
         }
     }
 }

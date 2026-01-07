@@ -1,6 +1,5 @@
 package me.hchome.kactor
 
-import me.hchome.kactor.impl.Actor
 import kotlin.time.Duration
 
 /**
@@ -14,51 +13,50 @@ import kotlin.time.Duration
  *
  */
 sealed interface SupervisorStrategy {
-    suspend fun processFailure(failure: ActorFailure) {
+
+    suspend fun onFailure(failure: ActorFailure) {
         val system = failure.system
-        system.processFailure(failure.ref, failure.sender, failure.message, this)
+        system.notifySystem(
+            failure.sender,
+            failure.ref,
+            "Actor failure",
+            ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL,
+            failure.cause
+        )
     }
 
-    object OneForOne : SupervisorStrategy
-    object AllForOne : SupervisorStrategy
-    data class Backoff(val initialDelay: Duration, val maxDelay: Duration) : SupervisorStrategy
-    object Resume : SupervisorStrategy
-    object Stop : SupervisorStrategy
-    object Escalate : SupervisorStrategy
-}
+    suspend fun decide(failure: ActorFailure)
 
-suspend fun SupervisorStrategy.onFailure(failure: ActorFailure) {
-    val system = failure.system
-    system.notifySystem(
-        failure.sender,
-        failure.ref,
-        "Actor failure",
-        ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL,
-        failure.cause
-    )
-    processFailure(failure)
-}
+    object OneForOne : SupervisorStrategy {
+        override suspend fun decide(failure: ActorFailure) {
 
-interface Supervisor {
-    /**
-     * Handles the failure of the child actor.
-     * @param child The child actor that failed
-     * @param singleton Whether the child actor is a singleton
-     * @param cause The cause of the failure
-     */
-    suspend fun supervise(
-        child: ActorRef,
-        singleton: Boolean,
-        cause: Throwable,
-    )
+        }
+    }
+    object AllForOne : SupervisorStrategy {
+        override suspend fun decide(failure: ActorFailure) {
+            val parentRef = failure.ref.parentOf()
+            if(parentRef.isNullOrEmpty())
 
-    /**
-     * recover the child actor attributes
-     */
-    suspend fun recover(child: ActorRef, attributes: Attributes)
+        }
+    }
+    data class Backoff(val initialDelay: Duration, val maxDelay: Duration) : SupervisorStrategy {
+        override suspend fun decide(failure: ActorFailure) {
 
-    /**
-     * snapshot the child actor attributes
-     */
-    suspend fun snapshot(child: ActorRef): Attributes?
+        }
+    }
+    object Resume : SupervisorStrategy {
+        override suspend fun decide(failure: ActorFailure) {
+
+        }
+    }
+    object Stop : SupervisorStrategy {
+        override suspend fun decide(failure: ActorFailure) {
+
+        }
+    }
+    object Escalate : SupervisorStrategy {
+        override suspend fun decide(failure: ActorFailure) {
+
+        }
+    }
 }

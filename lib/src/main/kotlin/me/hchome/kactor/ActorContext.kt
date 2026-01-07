@@ -128,7 +128,7 @@ interface ActorContext : Attributes {
      * @see ActorRef
      */
     fun isParent(parentRef: ActorRef): Boolean {
-        return parent == parentRef && parent.isNotEmpty()
+        return parentRef.isParentOf(ref)
     }
 
     /**

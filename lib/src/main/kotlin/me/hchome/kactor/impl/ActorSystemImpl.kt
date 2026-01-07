@@ -6,7 +6,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.DisposableHandle
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -16,36 +15,29 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
+import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorHandlerConfigHolder
 import me.hchome.kactor.ActorHandlerFactory
 import me.hchome.kactor.ActorHandlerRegistry
 import me.hchome.kactor.ActorRef
-import me.hchome.kactor.ActorRegistry
 import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
+import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SupervisorStrategy
-import me.hchome.kactor.SupervisorStrategy.AllForOne
-import me.hchome.kactor.SupervisorStrategy.Backoff
-import me.hchome.kactor.SupervisorStrategy.Escalate
-import me.hchome.kactor.SupervisorStrategy.OneForOne
-import me.hchome.kactor.SupervisorStrategy.Resume
-import me.hchome.kactor.SupervisorStrategy.Stop
 import me.hchome.kactor.SystemMessage
 import me.hchome.kactor.SystemMessage.*
 import me.hchome.kactor.UserMessage
-import me.hchome.kactor.isEmpty
+import me.hchome.kactor.isNullOrEmpty
 import me.hchome.kactor.isNotEmpty
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -60,7 +52,9 @@ import kotlin.uuid.Uuid
  */
 internal class ActorSystemImpl(
     handlerFactory: ActorHandlerFactory,
+    private val supervisorStrategy: SupervisorStrategy
 ) : ActorSystem,
+    Supervisor,
     ActorHandlerRegistry by ActorHandlerRegistryImpl(Dispatchers.Default, handlerFactory) {
     private val systemJob = SupervisorJob()
     private val systemScope = CoroutineScope(systemJob + Dispatchers.Default)
@@ -72,6 +66,8 @@ internal class ActorSystemImpl(
     private val actorChannels: MutableMap<ActorRef, Channel<ActorEnvelope>> = mutableMapOf()
     private val actorConfigHolders: MutableMap<ActorRef, ActorHandlerConfigHolder> = mutableMapOf()
     private val actorAttributes: MutableMap<ActorRef, Attributes> = mutableMapOf()
+
+    val all: Set<ActorRef> get() = actors.keys.toSet()
 
     private var mailboxJob: Job? = null
 
@@ -85,9 +81,9 @@ internal class ActorSystemImpl(
 //        systemScope.cancel()
 //    }
 
-    override fun contains(ref: ActorRef): Boolean = actorRegistry.contains(ref)
+    override fun contains(ref: ActorRef): Boolean = actors.contains(ref)
 
-    override fun childReferences(parent: ActorRef): Set<ActorRef> = actorRegistry.childReferences(parent)
+    override fun childReferences(parent: ActorRef): Set<ActorRef> = actors.keys.filter(parent::isParentOf).toSet()
 
     override suspend fun processFailure(
         ref: ActorRef,
@@ -95,7 +91,7 @@ internal class ActorSystemImpl(
         message: Any,
         strategy: SupervisorStrategy
     ) {
-
+        systemMailbox.send(SuperviseActor(ref, strategy))
     }
 
     override suspend fun <T : ActorHandler> actorOfSuspend(
@@ -108,14 +104,10 @@ internal class ActorSystemImpl(
         kClass: KClass<T>
     ): ActorRef where T : ActorHandler = actorOfSuspend(null, true, ActorRef.Companion.EMPTY, kClass)
 
-    override fun getServices(): Set<ActorRef> {
-        return all().filter { it.singleton }.map { it.ref }.toSet()
-    }
+    override fun getServices(): Set<ActorRef> = actors.filter { it.value.singleton }.keys.toSet()
 
-    override fun getService(kClass: KClass<out ActorHandler>): ActorRef {
-        return all().firstOrNull {
-            it.ref.actorId == "$kClass"
-        }?.ref ?: ActorRef.EMPTY
+    override fun getService(kClass: KClass<out ActorHandler>): ActorRef = actors.firstNotNullOf { (key, actor) ->
+        if (actor.singleton && ActorRef.ofService(kClass) == actor.ref) key else ActorRef.EMPTY
     }
 
     suspend fun recover(child: ActorRef, attributes: Attributes) {
@@ -130,55 +122,16 @@ internal class ActorSystemImpl(
 //        }
     }
 
-    suspend fun supervise(
-        child: ActorRef,
-        singleton: Boolean,
-        cause: Throwable
-    ) {
-        val actor = this[child]
-        if (LOGGER.isDebugEnabled) {
-            LOGGER.debug("Supervise actor ${child.actorId} with restart strategy ${supervisorStrategy.javaClass.simpleName}")
-        }
-        when (supervisorStrategy) {
-            is OneForOne, is AllForOne, is Escalate -> {
-                val attributes = snapshot(child)
-                destroyActor(child)
-                val new = if (singleton) {
-                    serviceOfSuspend(actor.handlerClass)
-                } else {
-                    actorOfSuspend(child.name, ActorRef.EMPTY, actor.handlerClass)
-                }
-                if (attributes != null) {
-                    recover(new, attributes)
-                }
-            }
-
-            is Resume -> {}
-            is Stop -> destroyActor(child)
-            is Backoff -> {
-                val (init, max) = supervisorStrategy
-                val attributes = snapshot(child)
-                delay(init)
-                destroyActor(child)
-                delay(max)
-                val new = if (singleton) {
-                    serviceOfSuspend(actor.handlerClass)
-                } else {
-                    actorOfSuspend(child.name, ActorRef.EMPTY, actor.handlerClass)
-                }
-                if (attributes != null) {
-                    recover(new, attributes)
-                }
-            }
-        }
-    }
-
     @OptIn(ExperimentalCoroutinesApi::class)
-    override fun start() = runBlocking {
-        mailboxJob?.cancelAndJoin()
+    override fun start() {
+        mailboxJob?.cancel()
         mailboxJob = systemScope.launch {
             try {
-                while (true) {
+                while (isActive) {
+                    systemMailbox.tryReceive().getOrNull()?.also {
+                        handleSystemMessage(it)
+                        continue
+                    }
                     select {
                         systemMailbox.onReceive(::handleSystemMessage)
                         userMailbox.onReceive(::handleUserMessage)
@@ -284,7 +237,7 @@ internal class ActorSystemImpl(
             id.isNullOrBlank() -> "$kClass"
             else -> id
         }
-        return if (!parent.isEmpty()) {
+        return if (!parent.isNullOrEmpty()) {
             "${parent.actorId}/$baseId"
         } else {
             baseId
@@ -315,24 +268,74 @@ internal class ActorSystemImpl(
         _notifications.tryEmit(notification)
     }
 
+    override suspend fun supervise(
+        child: ActorRef,
+        sender: ActorRef,
+        message: Any,
+        cause: Throwable
+    ) {
+        supervisorStrategy.onFailure(ActorFailure(this, child, sender, message, cause))
+    }
+
     private suspend fun handleSystemMessage(message: SystemMessage): Unit = when (message) {
         is CreateActor -> handleCreateActor(message)
-
+        else -> {}
     }
 
     private suspend fun handleUserMessage(message: UserMessage): Unit = when (message) {
         else -> {}
     }
 
-    private suspend fun handleCreateActor(message: CreateActor) {
+    private fun handleCreateActor(message: CreateActor) {
         val (ref, isSingleton, domain) = message
-        val config = this[domain]
-        val parentJob = if(ref.hasParent) {
+        val configHolder = this[domain]
+        val (_, dispatcher, config, factory, kClass) = configHolder
 
+        val parentJob = if (ref.hasParent) {
+            getRuntimeScope(ref.parentOf()).actorJob
+        } else {
+            systemJob
         }
+        val supervisor: Supervisor = actors[ref.parentOf()] ?: this
 
 
+        // new actor's environment
+        val newRuntimeScope = ActorScopeImpl(parentJob, dispatcher)
+        val newMailbox = Channel<ActorEnvelope>(config.capacity, config.onBufferOverflow) { envelope ->
+            onUndeliveredMessage(envelope, ref)
+        }
+        val newHandler = factory.getBean(kClass)
+        val newAttributes = AttributesImpl()
+        val newActor = Actor(
+            ref, isSingleton, this, config.supervisorStrategy,
+            supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes
+        )
+
+        // start an actor
+        newActor.startActor()
+
+        // store all actor information
+        actors[ref] = newActor
+        runtimeScopes[ref] = newRuntimeScope
+        actorChannels[ref] = newMailbox
+        actorConfigHolders[ref] = configHolder
+        actorAttributes[ref] = newAttributes
     }
+
+    private fun onUndeliveredMessage(wrapper: ActorEnvelope, ref: ActorRef) {
+        val message = wrapper.message
+        val sender = wrapper.sender
+        val formattedMessage = "Undelivered message: $message"
+        notifySystem(
+            sender,
+            ActorRef.EMPTY,
+            formattedMessage,
+            ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
+        )
+    }
+
+    private fun getRuntimeScope(ref: ActorRef): ActorScope =
+        runtimeScopes[ref] ?: throw ActorSystemException("Actor[$ref] runtime not found")
 
     companion object {
         private val LOGGER: Logger = LoggerFactory.getLogger(ActorSystemImpl::class.java)

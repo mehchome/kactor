@@ -16,6 +16,7 @@ import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
+import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SupervisorStrategy
 import me.hchome.kactor.TaskInfo
 import org.slf4j.Logger
@@ -31,16 +32,17 @@ private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, Co
  * An actor is a business logic object that can receive messages and send messages to other actors.
  * @see ActorSystem
  */
-class Actor(
+internal class Actor(
     val ref: ActorRef,
     val singleton: Boolean,
     private val actorSystem: ActorSystem,
     private val supervisorStrategy: SupervisorStrategy,
+    private val supervisor: Supervisor,
     private val mailbox: Channel<ActorEnvelope>,
     private val runtimeScope: ActorScope,
     private val handler: ActorHandler,
     private val attributes: Attributes
-) {
+) : Supervisor {
 
     private val context = ActorContextImpl(this, actorSystem, runtimeScope, attributes)
 
@@ -101,18 +103,8 @@ class Actor(
         }
     }
 
-    private fun undeliveredMessageHandler(wrapper: ActorEnvelope) {
-        val message = wrapper.message
-        val sender = wrapper.sender
-        val formattedMessage = "Undelivered message: $message"
-        actorSystem.notifySystem(
-            sender, ref, formattedMessage,
-            ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
-        )
-    }
-
     @Suppress("UNCHECKED_CAST")
-    fun processingMessage() {
+    fun startActor() {
         mailBoxJob = runtimeScope.launch {
             context(context) {
                 try {
@@ -132,11 +124,7 @@ class Actor(
                         } catch (e: CancellationException) {
                             LOGGER.debug("Actor cancelled: {}", ref, e)
                         } catch (e: Throwable) {
-                            supervisorStrategy.processFailure(
-                                ActorFailure(
-                                    actorSystem, this@Actor.ref, sender, message, e
-                                )
-                            )
+                            supervisor.supervise(ref, sender, message, e)
                         }
                     }
                 } finally {
@@ -146,6 +134,15 @@ class Actor(
                 }
             }
         }
+    }
+
+    override suspend fun supervise(
+        child: ActorRef,
+        sender: ActorRef,
+        message: Any,
+        cause: Throwable
+    ) {
+        supervisorStrategy.onFailure(ActorFailure(actorSystem, child, sender, message, cause))
     }
 
     companion object {
