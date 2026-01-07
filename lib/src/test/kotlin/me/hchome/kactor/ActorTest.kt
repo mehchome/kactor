@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -294,11 +293,6 @@ class ActorTest {
         delay(4000)
     }
 
-
-
-
-
-
     companion object : CoroutineScope by CoroutineScope(Dispatchers.Default) {
 
         lateinit var SYSTEM: ActorSystem
@@ -306,11 +300,11 @@ class ActorTest {
         @JvmStatic
         @BeforeAll
         fun createSystem() {
-            SYSTEM = ActorSystem.createOrGet(Dispatchers.IO)
-            SYSTEM.register<TestActor>()
-            SYSTEM.register<TestActor2>()
-            SYSTEM.register<TestActor3>()
-            SYSTEM.register<TestActor4>()
+            SYSTEM = ActorSystem.createOrGet()
+            SYSTEM.register<TestActor>(TestActor::class.simpleName!!)
+            SYSTEM.register<TestActor2>(TestActor2::class.simpleName!!)
+            SYSTEM.register<TestActor3>(TestActor3::class.simpleName!!)
+            SYSTEM.register<TestActor4>(TestActor4::class.simpleName!!)
 
             launch {
                 SYSTEM.notifications.collect { notification ->
@@ -322,7 +316,7 @@ class ActorTest {
         @AfterAll
         @JvmStatic
         fun cleanup() {
-            SYSTEM.dispose()
+            SYSTEM.shutdownGracefully()
             cancel()
         }
     }

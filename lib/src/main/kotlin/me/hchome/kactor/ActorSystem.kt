@@ -6,7 +6,6 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
 import me.hchome.kactor.impl.ActorSystemImpl
-import me.hchome.kactor.impl.LocalActorRegistry
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 
@@ -150,9 +149,7 @@ interface ActorSystem :  ActorHandlerRegistry {
          *     Planned to support a clustering actor system in the future.
          * </p>
          *
-         * @param dispatcher coroutine dispatcher
          * @param factory actor handler factory
-         * @param registry actor registry, currently only support local registry
          * @return actor system
          */
         @JvmStatic
