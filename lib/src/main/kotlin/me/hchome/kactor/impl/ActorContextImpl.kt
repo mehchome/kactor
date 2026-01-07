@@ -55,8 +55,6 @@ internal data class ActorContextImpl(
         system.send(ref, self.ref, message)
     }
 
-    override fun hasActor(ref: ActorRef): Boolean = ref in system
-
     override fun sendChildren(message: Any) {
         if (children.isEmpty()) {
             system.notifySystem(

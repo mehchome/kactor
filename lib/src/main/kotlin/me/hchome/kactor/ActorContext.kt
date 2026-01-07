@@ -92,11 +92,6 @@ interface ActorContext : Attributes {
 
 
     /**
-     * Check system has the reference
-     */
-    fun hasActor(ref: ActorRef): Boolean
-
-    /**
      * Check if an actor has a service
      * @see ActorRef
      */

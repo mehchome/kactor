@@ -65,4 +65,8 @@ sealed interface SupervisorStrategy {
             failure.supervisor.supervise(failure.ref, failure.sender, failure.message, failure.cause)
         }
     }
+
+    enum class Decision {
+        Restart, Stop
+    }
 }

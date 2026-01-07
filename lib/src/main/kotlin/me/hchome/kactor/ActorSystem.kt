@@ -118,7 +118,7 @@ interface ActorSystem :  ActorHandlerRegistry {
         throwable: Throwable? = null
     )
 
-    suspend fun processFailure(ref: ActorRef, sender: ActorRef, message: Any, strategy: SupervisorStrategy)
+    suspend fun processFailure(ref: ActorRef, decision: SupervisorStrategy.Decision)
 
     /**
      * shutdown actor system gracefully
