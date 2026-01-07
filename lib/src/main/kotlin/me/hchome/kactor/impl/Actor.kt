@@ -142,7 +142,7 @@ internal class Actor(
         message: Any,
         cause: Throwable
     ) {
-        supervisorStrategy.onFailure(ActorFailure(actorSystem, child, sender, message, cause))
+        supervisorStrategy.onFailure(ActorFailure(actorSystem, child, sender, message, cause, supervisor))
     }
 
     companion object {

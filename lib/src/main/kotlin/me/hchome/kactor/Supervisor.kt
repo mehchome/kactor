@@ -5,7 +5,7 @@ package me.hchome.kactor
  * of its child actors and handling any failures that occur during their execution.
  */
 @PublishedApi
-internal interface Supervisor {
+interface Supervisor {
     /**
      * Handles the failure of the child actor.
      * @param child The child actor that failed

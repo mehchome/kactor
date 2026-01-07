@@ -6,7 +6,6 @@ import kotlin.time.Duration
  * Actors can be restarted by the supervisor strategy when they crash.
  * [OneForOne] restarts the child actor by default.
  * [AllForOne] restarts all children when one of them crashes.
- * [Backoff] restarts the child actor with an exponential backoff delay.
  * [Resume] Not restarts the child actor but send to exception handling.
  * [Stop] stops the child actor.
  * [Escalate] escalates the failure to the supervisor
@@ -32,31 +31,38 @@ sealed interface SupervisorStrategy {
 
         }
     }
+
     object AllForOne : SupervisorStrategy {
         override suspend fun decide(failure: ActorFailure) {
+            val system = failure.system
             val parentRef = failure.ref.parentOf()
-            if(parentRef.isNullOrEmpty())
+            if (parentRef.isNotEmpty()) {
+                val allChildReferences = system.childReferences(parentRef)
+                for (childRef in allChildReferences) {
+                    // send restart messages to all children
+                }
+            } else { // root actor fall back to OneForOne
+                OneForOne.decide(failure)
+            }
 
         }
     }
-    data class Backoff(val initialDelay: Duration, val maxDelay: Duration) : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure) {
 
-        }
-    }
     object Resume : SupervisorStrategy {
         override suspend fun decide(failure: ActorFailure) {
-
+            // Report sent, no need to do anything
         }
     }
+
     object Stop : SupervisorStrategy {
         override suspend fun decide(failure: ActorFailure) {
 
         }
     }
+
     object Escalate : SupervisorStrategy {
         override suspend fun decide(failure: ActorFailure) {
-
+            failure.supervisor.supervise(failure.ref, failure.sender, failure.message, failure.cause)
         }
     }
 }

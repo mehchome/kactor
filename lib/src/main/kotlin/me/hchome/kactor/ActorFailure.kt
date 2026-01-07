@@ -8,5 +8,6 @@ data class ActorFailure(
     val ref: ActorRef,
     val sender: ActorRef,
     val message: Any,
-    val cause: Throwable
+    val cause: Throwable,
+    val supervisor: Supervisor
 )
