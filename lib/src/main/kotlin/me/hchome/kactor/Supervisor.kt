@@ -4,7 +4,6 @@ package me.hchome.kactor
  * Represents a supervisor in an actor-based system. A supervisor is responsible for managing the lifecycle
  * of its child actors and handling any failures that occur during their execution.
  */
-@PublishedApi
 interface Supervisor {
     /**
      * Handles the failure of the child actor.
