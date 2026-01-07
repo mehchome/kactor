@@ -1,19 +1,13 @@
 package me.hchome.kactor.impl
 
-import kotlinx.coroutines.CompletableJob
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.shareIn
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import me.hchome.kactor.ActorContext
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
@@ -29,19 +23,15 @@ import kotlin.time.Duration
  * Open BaseActor's CoroutineScope to use it in the actor handler's methods.
  */
 internal data class ActorContextImpl(
-    private val self: BaseActor,
+    private val self: Actor,
     private val system: ActorSystem,
-    private val dispatcher: CoroutineDispatcher,
-    internal val actorJob: Job
-) : ActorContext,
-    Attributes by AttributesImpl() {
+    private val runtimeScope: ActorScope,
+    private val attributes: Attributes
+) : ActorContext, Attributes by attributes {
 
-    internal val actorScope = CoroutineScope(actorJob + dispatcher)
 
     override fun getService(kClass: KClass<out ActorHandler>): ActorRef = system.getService(kClass)
 
-    override val services: Set<ActorRef>
-        get() = system.getServices()
 
     override val ref: ActorRef
         get() = self.ref
@@ -68,14 +58,6 @@ internal data class ActorContextImpl(
     override fun hasActor(ref: ActorRef): Boolean = ref in system
 
     override fun sendChildren(message: Any) {
-        if (self.singleton) {
-            system.notifySystem(
-                self.ref, ActorRef.EMPTY,
-                "Target children shouldn't be a service: $message",
-                ActorSystemNotificationMessage.NotificationType.ACTOR_EXCEPTION
-            )
-            return
-        }
         if (children.isEmpty()) {
             system.notifySystem(
                 self.ref, ActorRef.EMPTY,
@@ -94,9 +76,6 @@ internal data class ActorContextImpl(
     }
 
     override fun sendChild(childRef: ActorRef, message: Any) {
-        if (self.singleton) {
-            return
-        }
         children.firstOrNull { it == childRef }?.also {
             system.send(it, self.ref, message)
         } ?: run {
@@ -147,7 +126,6 @@ internal data class ActorContextImpl(
         id: String?,
         kClass: KClass<T>,
     ): ActorRef {
-        if (self.singleton) throw ActorSystemException("Can't create a child for a singleton actor")
         return system.actorOfSuspend(id, self.ref, kClass)
     }
 
@@ -162,16 +140,12 @@ internal data class ActorContextImpl(
         period: Duration,
         initDelay: Duration,
         block: suspend ActorHandler.(String) -> Unit
-    ): Job {
-        return self.schedule(period, initDelay, block)
-    }
+    ): Job = self.schedule(period, initDelay, block)
 
     override fun task(
         initDelay: Duration,
         block: suspend ActorHandler.(String) -> Unit
-    ): Job {
-        return self.task(initDelay, block)
-    }
+    ): Job = self.task(initDelay, block)
 
     override fun sendActor(ref: ActorRef, message: Any) {
         try {
@@ -204,24 +178,24 @@ internal data class ActorContextImpl(
     override fun launch(
         start: CoroutineStart,
         block: suspend CoroutineScope.() -> Unit
-    ): Job = actorScope.launch(start = start, block = block)
+    ): Job = runtimeScope.launch(started = start, block = block)
 
     override fun <T> async(
         start: CoroutineStart,
         block: suspend CoroutineScope.() -> T
-    ): Deferred<T> = actorScope.async(start = start, block = block)
+    ): Deferred<T> = runtimeScope.async(started = start, block = block)
 
     override fun <T> share(
         flow: Flow<T>,
         started: SharingStarted,
         replay: Int
-    ): SharedFlow<T> = flow.shareIn(actorScope, started, replay)
+    ): SharedFlow<T> = runtimeScope.share(flow, started, replay)
 
     override fun <T> state(
         flow: Flow<T>,
         stated: SharingStarted,
         initValue: T
-    ): StateFlow<T> = flow.stateIn(actorScope, stated, initValue)
+    ): StateFlow<T> = runtimeScope.state(flow, stated, initValue)
 
-    override suspend fun <T> state(flow: Flow<T>): StateFlow<T> = flow.stateIn(actorScope)
+    override suspend fun <T> state(flow: Flow<T>): StateFlow<T> = runtimeScope.state(flow)
 }

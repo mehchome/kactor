@@ -1,5 +1,7 @@
 package me.hchome.kactor
 
+import me.hchome.kactor.impl.Actor
+
 /**
  * Registry for managing actors in the actor system. This interface provides methods to
  * register, retrieve, check, and remove actors using their references.
@@ -22,7 +24,8 @@ interface ActorRegistry {
     /**
      * Get all actors in the registry
      */
-    fun all(): Set<Actor>
+    val all: Set<Actor>
+
 
     operator fun set(ref: ActorRef, actor: Actor)
 

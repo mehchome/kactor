@@ -4,11 +4,13 @@ package me.hchome.kactor
  * Notification message for the actor system
  */
 data class ActorSystemNotificationMessage(
+    val type: NotificationType,
     val sender: ActorRef,
     val receiver: ActorRef,
     val level: MessageLevel,
     val message: String,
-    val exception: Throwable? = null
+    val data: Any? = null,
+    val exception: Throwable? = null,
 ) {
     /**
      * Notification type

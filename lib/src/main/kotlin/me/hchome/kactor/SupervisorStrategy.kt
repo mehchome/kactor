@@ -1,5 +1,6 @@
 package me.hchome.kactor
 
+import me.hchome.kactor.impl.Actor
 import kotlin.time.Duration
 
 /**
@@ -36,10 +37,6 @@ suspend fun SupervisorStrategy.onFailure(failure: ActorFailure) {
         failure.cause
     )
     processFailure(failure)
-}
-
-internal fun getSupervisedActor(failure: ActorFailure): Actor {
-    return failure.system[failure.ref]
 }
 
 interface Supervisor {

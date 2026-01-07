@@ -73,12 +73,6 @@ interface ActorContext : Attributes {
     val children: Set<ActorRef>
 
     /**
-     * Service actor references
-     * @see ActorRef
-     */
-    val services: Set<ActorRef>
-
-    /**
      * Check if an actor has a parent
      * @see ActorRef
      */
@@ -89,12 +83,6 @@ interface ActorContext : Attributes {
      * @see ActorRef
      */
     val hasChildren: Boolean get() = children.isNotEmpty()
-
-    /**
-     * Check if an actor has services
-     * @see ActorRef
-     */
-    val hasServices: Boolean get() = services.isNotEmpty()
 
     /**
      * Check if an actor has a child

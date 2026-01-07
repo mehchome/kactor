@@ -1,5 +1,8 @@
 package me.hchome.kactor
 
+import org.jetbrains.annotations.Contract
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.contract
 import kotlin.io.path.Path
 import kotlin.io.path.name
 import kotlin.reflect.KClass
@@ -51,8 +54,13 @@ data class ActorRef(
 /**
  * Check if an actor reference is empty
  */
-
-fun ActorRef?.isEmpty(): Boolean = this == null || this == ActorRef.EMPTY || this.actorId.isBlank()
+@OptIn(ExperimentalContracts::class)
+fun ActorRef?.isEmpty(): Boolean {
+    contract {
+        returns(false) implies (this@isEmpty != null)
+    }
+    return this == null || this == ActorRef.EMPTY || this.actorId.isEmpty()
+}
 
 /**
  * Check if an actor reference is not empty

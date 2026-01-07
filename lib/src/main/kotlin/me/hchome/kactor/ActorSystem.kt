@@ -2,10 +2,7 @@
 
 package me.hchome.kactor
 
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.DisposableHandle
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
 import me.hchome.kactor.impl.ActorSystemImpl
@@ -18,7 +15,7 @@ import kotlin.time.Duration
  * @see Actor
  */
 @JvmDefaultWithCompatibility
-interface ActorSystem : Supervisor, ActorRegistry, ActorHandlerRegistry, DisposableHandle {
+interface ActorSystem :  ActorHandlerRegistry {
     val notifications: Flow<ActorSystemNotificationMessage>
 
     /**
@@ -123,7 +120,26 @@ interface ActorSystem : Supervisor, ActorRegistry, ActorHandlerRegistry, Disposa
 
     suspend fun processFailure(ref: ActorRef, sender: ActorRef, message: Any, strategy: SupervisorStrategy)
 
+    /**
+     * shutdown actor system gracefully
+     */
     fun shutdownGracefully()
+
+    /**
+     * start actor system
+     */
+    fun start()
+
+    /**
+     * get child actor references
+     */
+    fun childReferences(parent: ActorRef): Set<ActorRef>
+
+    /**
+     * check if an actor exists
+     */
+    operator fun contains(ref: ActorRef): Boolean
+
 
     companion object {
 
@@ -141,12 +157,9 @@ interface ActorSystem : Supervisor, ActorRegistry, ActorHandlerRegistry, Disposa
          */
         @JvmStatic
         fun createOrGet(
-            dispatcher: CoroutineDispatcher = Dispatchers.Default,
             factory: ActorHandlerFactory = DefaultActorHandlerFactory,
-            registry: ActorRegistry = LocalActorRegistry(),
-            supervisorStrategy: SupervisorStrategy = SupervisorStrategy.OneForOne
         ): ActorSystem {
-            return ActorSystemImpl(dispatcher, factory, registry, supervisorStrategy)
+            return ActorSystemImpl(factory)
         }
     }
 }
