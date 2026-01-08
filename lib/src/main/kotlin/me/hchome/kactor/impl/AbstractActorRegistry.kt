@@ -13,7 +13,6 @@ import me.hchome.kactor.SystemMessage.CreateActor
 import me.hchome.kactor.isEmpty
 import me.hchome.kactor.isNotEmpty
 import kotlin.collections.set
-import kotlin.reflect.KClass
 import kotlin.uuid.ExperimentalUuidApi
 
 abstract class AbstractActorRegistry : ActorRegistry {
@@ -29,14 +28,6 @@ abstract class AbstractActorRegistry : ActorRegistry {
         private set
     protected lateinit var systemSupervisor: Supervisor
         private set
-
-
-    override fun getSingleton(kClass: KClass<out ActorHandler>): ActorRef = actors.firstNotNullOf { (key, actor) ->
-        if (key.actorId.contentEquals("$kClass") && actor.singleton) key else ActorRef.EMPTY
-    }
-
-    override val allSingletons: Set<ActorRef>
-        get() = actors.filter { (_, actor) -> actor.singleton }.keys
 
     override val all: Set<ActorRef>
         get() = actors.keys
@@ -76,7 +67,7 @@ abstract class AbstractActorRegistry : ActorRegistry {
     }
 
     protected fun createActorRef(message: CreateActor): ActorRef {
-        val (id, parentRef, _, _, _) = message
+        val (id, parentRef, _, _) = message
         return buildActorId(parentRef, id)
     }
 
@@ -116,7 +107,6 @@ abstract class AbstractActorRegistry : ActorRegistry {
         val newHandler = configHolder.newActorHandler()
         val newActor = Actor(
             ref,
-            oldActor.singleton,
             oldActor.domain,
             actorSystem,
             config.supervisorStrategy,
@@ -124,8 +114,9 @@ abstract class AbstractActorRegistry : ActorRegistry {
             targetChannel,
             targetScope,
             newHandler,
-            actorAttributes[ref] ?: createAttribute(AttributesImpl())
-            )
+            actorAttributes[ref] ?: createAttribute(AttributesImpl()),
+            config.idle
+        )
         actors[ref] = newActor
         childReferences(ref).forEach { rebuildActors(it) }
     }
@@ -147,9 +138,8 @@ abstract class AbstractActorRegistry : ActorRegistry {
 
     protected val ActorRef.parentJob: Job get() = if (hasParent) getRuntimeScope(parentOf()).actorJob else systemJob
 
-    protected val ActorRef.hasChildren: Boolean get() = childReferences(this).isEmpty()
-
-    protected val ActorRef.supervisor: Supervisor get() = if(parentOf().isNotEmpty()) actors[parentOf()]?: systemSupervisor else systemSupervisor
+    protected val ActorRef.supervisor: Supervisor
+        get() = if (parentOf().isNotEmpty()) actors[parentOf()] ?: systemSupervisor else systemSupervisor
 
     protected abstract fun createAttribute(old: Attributes): Attributes
 }

@@ -12,8 +12,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.onClosed
-import kotlinx.coroutines.channels.onFailure
 import kotlinx.coroutines.channels.onSuccess
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -42,7 +40,6 @@ import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.reflect.KClass
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -103,27 +100,19 @@ internal class ActorSystemImpl(
         kClass: KClass<T>
     ): ActorRef {
         val domain = this.findName(kClass) ?: throw ActorSystemException("Actor handler type not found: $kClass")
-        return actorOfSuspend(id ?: Uuid.random().toString(), parent, false, domain)
-    }
-
-    override suspend fun <T> serviceOfSuspend(
-        kClass: KClass<T>
-    ): ActorRef where T : ActorHandler {
-        val domain = this.findName(kClass) ?: throw ActorSystemException("Actor handler type not found: $kClass")
-        return actorOfSuspend("$kClass", ActorRef.EMPTY, true, domain)
+        return actorOfSuspend(id ?: Uuid.random().toString(), parent, domain)
     }
 
     private suspend fun actorOfSuspend(
         id: String,
         parent: ActorRef,
-        singleton: Boolean,
         domain: String,
     ): ActorRef {
         if (!runningFlag.load()) {
             throw ActorSystemException("Actor system not running")
         }
         val deferred = CompletableDeferred<ActorRef>()
-        val result = systemMailbox.trySend(CreateActor(id, parent, false, domain, deferred))
+        val result = systemMailbox.trySend(CreateActor(id, parent, domain, deferred))
         if (result.isFailure) {
             deferred.cancel(CancellationException(result.exceptionOrNull()?.message ?: "Actor creation failed"))
         }
@@ -131,10 +120,6 @@ internal class ActorSystemImpl(
             deferred.await()
         }
     }
-
-    override fun getServices(): Set<ActorRef> = actorRegistry.allSingletons
-
-    override fun getService(kClass: KClass<out ActorHandler>): ActorRef = actorRegistry.getSingleton(kClass)
 
     override fun start() {
         mailboxJob?.cancel()
@@ -149,31 +134,17 @@ internal class ActorSystemImpl(
                         systemMailbox.onReceiveCatching { result ->
                             result.onSuccess {
                                 handleSystemMessage(it)
-                            }.onClosed {
-                                notifySystem(
-                                    ActorRef.EMPTY,
-                                    ActorRef.EMPTY,
-                                    "ActorSystem system mailbox closed",
-                                    ActorSystemNotificationMessage.NotificationType.SYSTEM_CLOSE
-                                )
                             }
                         }
                         userMailbox.onReceiveCatching { result ->
                             result.onSuccess {
                                 handleUserMessage(it)
-                            }.onClosed {
-                                notifySystem(
-                                    ActorRef.EMPTY,
-                                    ActorRef.EMPTY,
-                                    "ActorSystem user mailbox closed",
-                                    ActorSystemNotificationMessage.NotificationType.SYSTEM_CLOSE
-                                )
                             }
                         }
                     }
                 }
             } catch (e: CancellationException) {
-                LOGGER.debug("Actor system mailbox job cancelled")
+                LOGGER.debug("Actor system mailboxes job cancelled")
                 throw e
             }
         }
@@ -186,12 +157,18 @@ internal class ActorSystemImpl(
         actorRegistry.stopAllActors()
         systemJob.cancelAndJoin()
         systemScope.cancel()
+        notifySystem(ActorRef.EMPTY, ActorRef.EMPTY, "Actor system shutdown", ActorSystemNotificationMessage.NotificationType.SYSTEM_CLOSE)
     }
 
     override fun destroyActor(actorRef: ActorRef) {
-        val result = systemMailbox.trySend(StopActor(actorRef))
-        if (result.isFailure) {
-            LOGGER.warn("Failed to destroy actor $actorRef: ${result.exceptionOrNull()?.message}")
+        systemScope.launch {
+            try {
+                systemMailbox.send(StopActor(actorRef))
+            } catch(_: CancellationException) {
+                LOGGER.debug("Actor system mailboxes job cancelled")
+            } catch (e: Throwable) {
+                notifySystem(actorRef, ActorRef.EMPTY, e.message ?: "Actor destroy failed", ActorSystemNotificationMessage.NotificationType.SYSTEM_ERROR)
+            }
         }
     }
 
@@ -281,7 +258,7 @@ internal class ActorSystemImpl(
         }
     }
 
-    private suspend fun handleSystemMessage(message: SystemMessage): Unit = try {
+    private fun handleSystemMessage(message: SystemMessage): Unit = try {
         when (message) {
             is CreateActor -> actorRegistry.createActor(message)
             is StopActor -> actorRegistry.stopActor(message.ref)
@@ -300,18 +277,6 @@ internal class ActorSystemImpl(
     private suspend fun handleUserMessage(message: UserMessage): Unit = when (message) {
         is UserMessage.Tell -> actorRegistry.tell(message)
         is UserMessage.Ask -> actorRegistry.ask(message)
-    }
-
-    private fun onUndeliveredMessage(wrapper: ActorEnvelope, ref: ActorRef) {
-        val message = wrapper.message
-        val sender = wrapper.sender
-        val formattedMessage = "Undelivered message: $message"
-        notifySystem(
-            sender,
-            ActorRef.EMPTY,
-            formattedMessage,
-            ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
-        )
     }
 
     companion object {

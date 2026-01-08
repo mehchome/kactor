@@ -4,23 +4,18 @@ package me.hchome.kactor.impl
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.actor
-import kotlinx.coroutines.channels.onFailure
-import kotlinx.coroutines.channels.onSuccess
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.selects.onTimeout
+import kotlinx.coroutines.selects.whileSelect
 import kotlinx.coroutines.withContext
 import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystem
-import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.MessagePriority
@@ -42,7 +37,6 @@ private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, Co
  */
 class Actor internal constructor(
     val ref: ActorRef,
-    val singleton: Boolean,
     val domain: String,
     private val actorSystem: ActorSystem,
     private val supervisorStrategy: SupervisorStrategy,
@@ -50,7 +44,8 @@ class Actor internal constructor(
     private val mailbox: MailBox,
     private val runtimeScope: ActorScope,
     private val handler: ActorHandler,
-    private val attributes: Attributes
+    attributes: Attributes,
+    private val idle: Duration,
 ) : Supervisor {
 
     private val context = ActorContextImpl(this, actorSystem, runtimeScope, attributes)
@@ -70,18 +65,8 @@ class Actor internal constructor(
 
 
     fun send(message: Any, sender: ActorRef, priority: MessagePriority = MessagePriority.NORMAL) {
-        val result = mailbox.trySend(ActorEnvelope.SendActorEnvelope(message, sender), priority)
-        if (result.isFailure) {
-            runtimeScope.launch {
-                withContext(NonCancellable) {
-                    supervisor.supervise(
-                        ref,
-                        sender,
-                        message,
-                        result.exceptionOrNull() ?: ActorSystemException("Unknown error")
-                    )
-                }
-            }
+        runtimeScope.launch {
+            mailbox.send(ActorEnvelope.SendActorEnvelope(message, sender), priority)
         }
     }
 
@@ -91,18 +76,8 @@ class Actor internal constructor(
         callback: CompletableDeferred<in T>,
         priority: MessagePriority = MessagePriority.NORMAL
     ) {
-        val result = mailbox.trySend(ActorEnvelope.AskActorEnvelope(message, sender, callback), priority)
-        if (result.isFailure) {
-            runtimeScope.launch {
-                withContext(NonCancellable) {
-                    supervisor.supervise(
-                        ref,
-                        sender,
-                        message,
-                        result.exceptionOrNull() ?: ActorSystemException("Unknown error")
-                    )
-                }
-            }
+        runtimeScope.launch {
+            mailbox.send(ActorEnvelope.SendActorEnvelope(message, sender), priority)
         }
     }
 
@@ -135,6 +110,7 @@ class Actor internal constructor(
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Suppress("UNCHECKED_CAST")
     fun startActor() {
         mailBoxJob = runtimeScope.launch {
@@ -142,29 +118,48 @@ class Actor internal constructor(
             context(context) {
                 try {
                     handler.preStart()
-                    for (msg in receiveChannel) {
-                        val message = msg.message
-                        val sender = msg.sender
-                        try {
-                            when (msg) {
-                                is ActorEnvelope.SendActorEnvelope -> handler.onMessage(message, sender)
-                                is ActorEnvelope.AskActorEnvelope<*> -> handler.onAsk(
-                                    message,
-                                    sender,
-                                    msg.callback as CompletableDeferred<in Any>
-                                )
-                            }
-                        } catch (e: CancellationException) {
-                            LOGGER.debug("Actor cancelled: {}", ref, e)
-                            throw e
-                        } catch (e: Throwable) {
-                            val decision = supervisor.supervise(ref, sender, message, e)
-                            when (decision) {
-                                SupervisorStrategy.Decision.Resume -> continue
-                                else -> break
+                    whileSelect {
+                        receiveChannel.onReceiveCatching { result ->
+                            val msg = result.getOrNull()
+                            if (msg == null) {
+                                false
+                            } else {
+                                val message = msg.message
+                                val sender = msg.sender
+                                try {
+                                    when (msg) {
+                                        is ActorEnvelope.SendActorEnvelope -> handler.onMessage(message, sender)
+                                        is ActorEnvelope.AskActorEnvelope<*> -> handler.onAsk(
+                                            message,
+                                            sender,
+                                            msg.callback as CompletableDeferred<in Any>
+                                        )
+                                    }
+                                    true
+                                } catch (e: Throwable) {
+                                    val decision = supervisor.supervise(ref, sender, message, e)
+                                    when (decision) {
+                                        SupervisorStrategy.Decision.Resume -> {
+                                            if (msg is ActorEnvelope.AskActorEnvelope<*>) msg.callback.completeExceptionally(
+                                                e
+                                            )
+                                            true
+                                        }
+
+                                        else -> false // let actor stop/restart
+                                    }
+                                }
                             }
                         }
+                        onTimeout(idle) {
+                            // actor idles, no message received
+                            handler.onIdle()
+                            true
+                        }
                     }
+                } catch (e: CancellationException) {
+                    LOGGER.debug("Actor cancelled: {}", ref)
+                    throw e
                 } finally {
                     withContext(NonCancellable) {
                         handler.postStop()
