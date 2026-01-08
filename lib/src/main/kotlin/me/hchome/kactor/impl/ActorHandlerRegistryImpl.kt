@@ -16,25 +16,30 @@ internal class ActorHandlerRegistryImpl(
     private val defaultFactory: ActorHandlerFactory = DefaultActorHandlerFactory
 ) : ActorHandlerRegistry {
 
-    private val registry: MutableMap<KClass<out ActorHandler>, ActorHandlerConfigHolder> =
-        ConcurrentHashMap<KClass<out ActorHandler>, ActorHandlerConfigHolder>()
+    private val registry: MutableMap<String, ActorHandlerConfigHolder> =
+        ConcurrentHashMap<String, ActorHandlerConfigHolder>()
 
-    override fun <T> register(
+    override fun register(
+        domain: String,
         dispatcher: CoroutineDispatcher?,
         config: ActorConfig,
         factory: ActorHandlerFactory?,
-        kClass: KClass<T>
-    ) where T : ActorHandler {
+        kClass: KClass<out ActorHandler>
+    )  {
         val dispatcher = dispatcher ?: defaultDispatcher
         val factory = factory ?: defaultFactory
-        registry[kClass] = ActorHandlerConfigHolder(dispatcher, config, factory)
+        registry[domain] = ActorHandlerConfigHolder(domain, dispatcher, config, factory, kClass)
     }
 
-    override fun <T> get(kClass: KClass<T>): ActorHandlerConfigHolder where T : ActorHandler {
-        return registry[kClass] ?: throw IllegalArgumentException("No handler registered for $kClass")
+    override fun get(domain: String): ActorHandlerConfigHolder {
+        return registry[domain] ?: throw IllegalArgumentException("No handler registered for $domain")
     }
 
-    override fun <T> contains(kClass: KClass<T>): Boolean where T : ActorHandler  {
-        return registry.containsKey(kClass)
+    override fun contains(domain: String): Boolean {
+        return registry.containsKey(domain)
+    }
+
+    override fun  findName(kClass: KClass<out ActorHandler>): String? {
+        return registry.filter { it.value.kClass == kClass }.keys.firstOrNull()
     }
 }

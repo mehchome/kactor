@@ -2,30 +2,19 @@
 
 package me.hchome.kactor
 
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.DisposableHandle
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
 import me.hchome.kactor.impl.ActorSystemImpl
 import me.hchome.kactor.impl.LocalActorRegistry
+import me.hchome.kactor.MessagePriority
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 
 /**
  * An actor system is a container for actors. It is responsible for creating, destroying, and sending messages to actors.
- * @see Actor
  */
 @JvmDefaultWithCompatibility
-interface ActorSystem : Supervisor, ActorHandlerRegistry, DisposableHandle {
-    val notifications: Flow<ActorSystemNotificationMessage>
-
-    /**
-     * Check if an actor exists
-     * @param actorRef actor reference
-     */
-    operator fun contains(actorRef: ActorRef): Boolean
+interface ActorSystem : ActorHandlerRegistry {
 
     /**
      * create an actor
@@ -86,14 +75,15 @@ interface ActorSystem : Supervisor, ActorHandlerRegistry, DisposableHandle {
      * @param sender sender actor reference
      * @param message message
      */
-    fun send(actorRef: ActorRef, sender: ActorRef, message: Any)
+    fun send(actorRef: ActorRef, sender: ActorRef, message: Any, priority: MessagePriority = MessagePriority.NORMAL)
 
     /**
      * send a message to an actor
      * @param actorRef actor reference
      * @param message message
      */
-    fun send(actorRef: ActorRef, message: Any) = send(actorRef, ActorRef.EMPTY, message)
+    fun send(actorRef: ActorRef, message: Any, priority: MessagePriority = MessagePriority.NORMAL) =
+        send(actorRef, ActorRef.EMPTY, message, priority)
 
 
     /**
@@ -104,7 +94,12 @@ interface ActorSystem : Supervisor, ActorHandlerRegistry, DisposableHandle {
      * @param timeout timeout
      * @return deferred result
      */
-    fun <T : Any> ask(actorRef: ActorRef, sender: ActorRef, message: Any, timeout: Duration = Duration.INFINITE): Deferred<T>
+    fun <T : Any> ask(
+        actorRef: ActorRef,
+        sender: ActorRef,
+        message: Any,
+        priority: MessagePriority = MessagePriority.NORMAL,
+    ): Deferred<T>
 
     /**
      * get a service actor reference
@@ -122,6 +117,38 @@ interface ActorSystem : Supervisor, ActorHandlerRegistry, DisposableHandle {
         throwable: Throwable? = null
     )
 
+    suspend fun processFailure(ref: ActorRef, decision: SupervisorStrategy.Decision)
+
+    /**
+     * shutdown actor system gracefully
+     */
+    fun shutdownGracefully()
+
+    /**
+     * start actor system
+     */
+    fun start()
+
+    /**
+     * get child actor references
+     */
+    fun childReferences(parent: ActorRef): Set<ActorRef>
+
+    /**
+     * check if an actor exists
+     */
+    operator fun contains(ref: ActorRef): Boolean
+
+    /**
+     * add message listener to the actor system
+     */
+    fun addListener(listener: ActorSystemMessageListener)
+
+    /**
+     * add message listener to the actor system
+     */
+    operator fun plusAssign(listener: ActorSystemMessageListener) = addListener(listener)
+
     companion object {
 
         /**
@@ -131,30 +158,31 @@ interface ActorSystem : Supervisor, ActorHandlerRegistry, DisposableHandle {
          *     Planned to support a clustering actor system in the future.
          * </p>
          *
-         * @param dispatcher coroutine dispatcher
          * @param factory actor handler factory
-         * @param registry actor registry, currently only support local registry
          * @return actor system
          */
         @JvmStatic
         fun createOrGet(
-            dispatcher: CoroutineDispatcher = Dispatchers.Default,
             factory: ActorHandlerFactory = DefaultActorHandlerFactory,
-            registry: ActorRegistry = LocalActorRegistry(),
-            restartStrategy: RestartStrategy = RestartStrategy.OneForOne
-        ): ActorSystem {
-            return ActorSystemImpl(dispatcher, factory, registry, restartStrategy)
-        }
+            strategy: SupervisorStrategy = SupervisorStrategy.OneForOne,
+            registry: ActorRegistry = LocalActorRegistry()
+        ): ActorSystem = ActorSystemImpl(factory, strategy, registry)
     }
 }
 
-suspend inline fun <reified T> ActorSystem.actorOfSuspend(id: String? = null, parent: ActorRef = ActorRef.EMPTY): ActorRef where T : ActorHandler =
+suspend inline fun <reified T> ActorSystem.actorOfSuspend(
+    id: String? = null,
+    parent: ActorRef = ActorRef.EMPTY
+): ActorRef where T : ActorHandler =
     actorOfSuspend(id, parent, T::class)
 
 suspend inline fun <reified T> ActorSystem.serviceOfSuspend(): ActorRef where T : ActorHandler =
     serviceOfSuspend(T::class)
 
-inline fun <reified T> ActorSystem.actorOf(id: String? = null, parent: ActorRef = ActorRef.EMPTY): ActorRef where T : ActorHandler =
+inline fun <reified T> ActorSystem.actorOf(
+    id: String? = null,
+    parent: ActorRef = ActorRef.EMPTY
+): ActorRef where T : ActorHandler =
     actorOf(id, parent, T::class)
 
 inline fun <reified T> ActorSystem.serviceOf(): ActorRef where T : ActorHandler = serviceOf(T::class)

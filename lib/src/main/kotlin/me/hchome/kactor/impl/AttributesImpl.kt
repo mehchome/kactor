@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 @Suppress("UNCHECKED_CAST")
 internal class AttributesImpl(ref: Attributes? = null) : Attributes {
-    private val attributes = ConcurrentHashMap<AttributeKey<*>, Any?>()
+    private val attributes = ConcurrentHashMap<AttributeKey<*>, Any>()
 
     init {
         if (ref != null) {
