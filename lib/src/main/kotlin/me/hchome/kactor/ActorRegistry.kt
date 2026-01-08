@@ -28,7 +28,7 @@ interface ActorRegistry: ActorSystemInitializationListener {
     /**
      * get child actor references
      */
-    fun childReferences(parent: ActorRef): Set<ActorRef> = all.filter(parent::isChildOf).toSet()
+    fun childReferences(parent: ActorRef): Set<ActorRef> = all.filter(parent::isParentOf).toSet()
 
     /**
      * create an actor
