@@ -79,14 +79,16 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         actorSystem.notifySystem(ActorRef.EMPTY, ref, "Actor[$ref] stopped", ActorSystemNotificationMessage.NotificationType.ACTOR_DESTROYED)
     }
 
-    override fun restartActor(ref: ActorRef) {
+    override fun restartActor(ref: ActorRef, recreate: Boolean) {
         if (ref.isEmpty()) return
         actors[ref] ?: return
         val runtimeScope = runtimeScopes[ref] ?: return
         closeChannels(ref)
         runtimeScope.cancel()
         // rebuild actor environment
-        rebuildChannels(ref)
+        if(recreate) {
+            rebuildChannels(ref)
+        }
         rebuildActorScope(ref)
         rebuildAttributeStore(ref)
         // rebuild actor objects

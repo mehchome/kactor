@@ -7,8 +7,11 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.onFailure
+import kotlinx.coroutines.channels.onSuccess
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
@@ -67,7 +70,12 @@ class Actor internal constructor(
         if (result.isFailure) {
             runtimeScope.launch {
                 withContext(NonCancellable) {
-                    supervisor.supervise(ref, sender, message, result.exceptionOrNull() ?: ActorSystemException("Unknown error"))
+                    supervisor.supervise(
+                        ref,
+                        sender,
+                        message,
+                        result.exceptionOrNull() ?: ActorSystemException("Unknown error")
+                    )
                 }
             }
         }
@@ -78,7 +86,12 @@ class Actor internal constructor(
         if (result.isFailure) {
             runtimeScope.launch {
                 withContext(NonCancellable) {
-                    supervisor.supervise(ref, sender, message, result.exceptionOrNull() ?: ActorSystemException("Unknown error"))
+                    supervisor.supervise(
+                        ref,
+                        sender,
+                        message,
+                        result.exceptionOrNull() ?: ActorSystemException("Unknown error")
+                    )
                 }
             }
         }
@@ -133,8 +146,13 @@ class Actor internal constructor(
                             }
                         } catch (e: CancellationException) {
                             LOGGER.debug("Actor cancelled: {}", ref, e)
+                            throw e
                         } catch (e: Throwable) {
-                            supervisor.supervise(ref, sender, message, e)
+                            val decision = supervisor.supervise(ref, sender, message, e)
+                            when (decision) {
+                                SupervisorStrategy.Decision.Resume -> continue
+                                else -> break
+                            }
                         }
                     }
                 } finally {
@@ -151,8 +169,8 @@ class Actor internal constructor(
         sender: ActorRef,
         message: Any,
         cause: Throwable
-    ) {
-        supervisorStrategy.onFailure(ActorFailure(actorSystem, child, sender, message, cause, supervisor))
+    ): SupervisorStrategy.Decision {
+        return supervisorStrategy.onFailure(ActorFailure(actorSystem, child, sender, message, cause, supervisor))
     }
 
     companion object {

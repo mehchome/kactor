@@ -52,7 +52,7 @@ interface ActorRegistry: ActorSystemInitializationListener {
     /**
      * restart an actor
      */
-    fun restartActor(ref: ActorRef)
+    fun restartActor(ref: ActorRef, recreate: Boolean)
 
     /**
      * stop all actors

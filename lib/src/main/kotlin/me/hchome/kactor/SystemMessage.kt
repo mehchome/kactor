@@ -21,7 +21,7 @@ sealed interface SystemMessage {
     /**
      * messages to restart an actor
      */
-    data class RestartActor(val ref: ActorRef) : SystemMessage
+    data class RestartActor(val ref: ActorRef, val recreate: Boolean = true) : SystemMessage
 
     /**
      * messages to stop an actor
