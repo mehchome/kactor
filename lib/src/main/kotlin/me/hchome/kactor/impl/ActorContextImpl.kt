@@ -30,10 +30,6 @@ internal data class ActorContextImpl(
     private val attributes: Attributes
 ) : ActorContext, Attributes by attributes {
 
-
-    override fun getService(kClass: KClass<out ActorHandler>): ActorRef = system.getService(kClass)
-
-
     override val ref: ActorRef
         get() = self.ref
 
@@ -43,10 +39,6 @@ internal data class ActorContextImpl(
     override val children: Set<ActorRef>
         get() = system.childReferences(self.ref)
 
-    override fun <T : ActorHandler> sendService(kClass: KClass<out T>, message: Any, priority: MessagePriority) {
-        val ref = ActorRef.ofService(kClass)
-        system.send(ref, self.ref, message, priority)
-    }
 
     override fun sendChildren(message: Any, priority: MessagePriority) {
         children.forEach {
@@ -132,8 +124,6 @@ internal data class ActorContextImpl(
             throw ActorSystemException("Actor not in system")
         }
     }
-
-    override suspend fun <T : ActorHandler> newService(kClass: KClass<T>): ActorRef = system.serviceOfSuspend(kClass)
 
     override fun launch(
         start: CoroutineStart,

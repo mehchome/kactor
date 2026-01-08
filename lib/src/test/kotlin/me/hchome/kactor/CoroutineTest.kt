@@ -2,7 +2,6 @@ package me.hchome.kactor
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -46,7 +45,7 @@ class CoroutineTest {
     @Test
     fun `test send many messages`(): Unit = runBlocking {
         val ref = SYSTEM.actorOf<TestActor>("test1")
-        val job2 = launch(SupervisorJob()) {
+        val job2 = launch {
             launch {
                 (0..1_000_000).forEach {
                     delay(20)
@@ -68,6 +67,17 @@ class CoroutineTest {
         SYSTEM.destroyActor(ref)
     }
 
+    @Test
+    fun `test idle function`() = runBlocking {
+        val ref = SYSTEM.actorOf<TestActor>("test2")
+        val job = launch {
+            delay(10.seconds)
+            SYSTEM.send(ref, "Hello world!")
+        }
+        job.join()
+        delay(1.seconds)
+        SYSTEM.destroyActor(ref)
+    }
 
     companion object : CoroutineScope by CoroutineScope(Dispatchers.Default) {
 
@@ -78,9 +88,9 @@ class CoroutineTest {
         @BeforeAll
         fun createSystem() {
             SYSTEM = ActorSystem.createOrGet()
-            SYSTEM.register<TestActor>("${TestActor::class}", config = ActorConfig(10, BufferOverflow.SUSPEND))
+            SYSTEM.register<TestActor>("${TestActor::class}", config = ActorConfig(10, BufferOverflow.SUSPEND, idle = 1.seconds))
             SYSTEM += ActorSystemMessageListener {
-                LOGGER.info(it.toString())
+                LOGGER.debug(it.toString())
             }
             SYSTEM.start()
         }
@@ -98,6 +108,12 @@ class CoroutineTest {
         override suspend fun onMessage(message: Any, sender: ActorRef) {
             delay(100)
             println("Received: $message")
+        }
+
+        context(context: ActorContext)
+        override suspend fun onIdle() {
+            println("System is idle")
+            context.stopSelf()
         }
     }
 }

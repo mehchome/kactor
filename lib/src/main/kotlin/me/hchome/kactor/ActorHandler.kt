@@ -26,14 +26,6 @@ interface ActorHandler {
     }
 
     /**
-     * exception handler
-     */
-    context(context: ActorContext)
-    suspend fun onException(exception: Throwable, sender: ActorRef) {
-        throw exception
-    }
-
-    /**
      * Task exception handler
      */
     context(context: ActorContext)
@@ -55,8 +47,8 @@ interface ActorHandler {
     }
 
     /**
-     * Before the actor system destroys the actor
+     * actor idle over set timeout
      */
-    fun preDestroy() {
-    }
+    context(context: ActorContext)
+    suspend fun onIdle() {}
 }
