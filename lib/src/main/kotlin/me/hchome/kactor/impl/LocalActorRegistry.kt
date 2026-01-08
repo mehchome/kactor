@@ -31,7 +31,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
     }
 
     override fun createActor(message: SystemMessage.CreateActor) {
-        val (_, _, isSingleton, _, callback) = message
+        val (_, _, _, callback) = message
         val configHolder = actorSystem[message.domain]
         val (_, dispatcher, config, _, _) = configHolder
         val ref = createActorRef(message)
@@ -47,7 +47,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         val newHandler = message.handler
         val newAttributes = AttributesImpl()
         val newActor = Actor(
-            ref, isSingleton, message.domain, actorSystem, config.supervisorStrategy,
+            ref, message.domain, actorSystem, config.supervisorStrategy,
             supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes
         )
         // store all actor information

@@ -6,9 +6,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.runBlocking
 import me.hchome.kactor.impl.ActorSystemImpl
 import me.hchome.kactor.impl.LocalActorRegistry
-import me.hchome.kactor.MessagePriority
 import kotlin.reflect.KClass
-import kotlin.time.Duration
 
 /**
  * An actor system is a container for actors. It is responsible for creating, destroying, and sending messages to actors.
@@ -42,26 +40,6 @@ interface ActorSystem : ActorHandlerRegistry {
         parent: ActorRef = ActorRef.EMPTY,
         kClass: KClass<T>
     ): ActorRef where T : ActorHandler
-
-    /**
-     * create a service actor
-     * @param kClass actor handler class
-     * @return actor reference
-     */
-    fun <T> serviceOf(
-        kClass: KClass<T>
-    ): ActorRef where T : ActorHandler = runBlocking {
-        serviceOfSuspend(kClass)
-    }
-
-    suspend fun <T> serviceOfSuspend(
-        kClass: KClass<T>
-    ): ActorRef where T : ActorHandler
-
-    /**
-     * get all services
-     */
-    fun getServices(): Set<ActorRef>
 
     /**
      * destroy an actor
@@ -100,13 +78,6 @@ interface ActorSystem : ActorHandlerRegistry {
         message: Any,
         priority: MessagePriority = MessagePriority.NORMAL,
     ): Deferred<T>
-
-    /**
-     * get a service actor reference
-     * @param kClass actor handler class
-     * @return actor reference
-     */
-    fun getService(kClass: KClass<out ActorHandler>): ActorRef
 
 
     fun notifySystem(
@@ -176,15 +147,8 @@ suspend inline fun <reified T> ActorSystem.actorOfSuspend(
 ): ActorRef where T : ActorHandler =
     actorOfSuspend(id, parent, T::class)
 
-suspend inline fun <reified T> ActorSystem.serviceOfSuspend(): ActorRef where T : ActorHandler =
-    serviceOfSuspend(T::class)
-
 inline fun <reified T> ActorSystem.actorOf(
     id: String? = null,
     parent: ActorRef = ActorRef.EMPTY
 ): ActorRef where T : ActorHandler =
     actorOf(id, parent, T::class)
-
-inline fun <reified T> ActorSystem.serviceOf(): ActorRef where T : ActorHandler = serviceOf(T::class)
-
-inline fun <reified T> ActorSystem.getService(): ActorRef where T : ActorHandler = getService(T::class)

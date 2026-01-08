@@ -30,14 +30,6 @@ abstract class AbstractActorRegistry : ActorRegistry {
     protected lateinit var systemSupervisor: Supervisor
         private set
 
-
-    override fun getSingleton(kClass: KClass<out ActorHandler>): ActorRef = actors.firstNotNullOf { (key, actor) ->
-        if (key.actorId.contentEquals("$kClass") && actor.singleton) key else ActorRef.EMPTY
-    }
-
-    override val allSingletons: Set<ActorRef>
-        get() = actors.filter { (_, actor) -> actor.singleton }.keys
-
     override val all: Set<ActorRef>
         get() = actors.keys
 
@@ -76,7 +68,7 @@ abstract class AbstractActorRegistry : ActorRegistry {
     }
 
     protected fun createActorRef(message: CreateActor): ActorRef {
-        val (id, parentRef, _, _, _) = message
+        val (id, parentRef, _, _) = message
         return buildActorId(parentRef, id)
     }
 
@@ -116,7 +108,6 @@ abstract class AbstractActorRegistry : ActorRegistry {
         val newHandler = configHolder.newActorHandler()
         val newActor = Actor(
             ref,
-            oldActor.singleton,
             oldActor.domain,
             actorSystem,
             config.supervisorStrategy,

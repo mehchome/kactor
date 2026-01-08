@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
-import me.hchome.kactor.MessagePriority
 import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 import kotlin.time.Duration
@@ -93,18 +92,6 @@ interface ActorContext : Attributes {
 
 
     /**
-     * Check if an actor has a service
-     * @see ActorRef
-     */
-    fun hasService(kClass: KClass<out ActorHandler>): Boolean = getService(kClass).isNotEmpty()
-
-    /**
-     * Get a service actor reference
-     * @see ActorRef
-     */
-    fun getService(kClass: KClass<out ActorHandler>): ActorRef
-
-    /**
      * Check if an actor is a child of target actor
      * @see ActorRef
      */
@@ -126,11 +113,6 @@ interface ActorContext : Attributes {
     fun isParent(parentRef: ActorRef): Boolean {
         return parentRef.isParentOf(ref)
     }
-
-    /**
-     * Send a message to a service actor
-     */
-    fun <T : ActorHandler> sendService(kClass: KClass<out T>, message: Any, priority: MessagePriority = MessagePriority.NORMAL)
 
     /**
      * Send a message to any actor
@@ -211,8 +193,6 @@ interface ActorContext : Attributes {
     ): ActorRef where T : ActorHandler
 
 
-    suspend fun <T> newService(kClass: KClass<T>): ActorRef where T : ActorHandler
-
     /**
      * Schedule a task
      */
@@ -236,11 +216,6 @@ suspend inline fun <reified T : ActorHandler> ActorContext.newActor(id: String? 
     return newActor(id, T::class)
 }
 
-suspend inline fun <reified T : ActorHandler> ActorContext.newService(): ActorRef = newService(T::class)
-
-inline fun <reified T : ActorHandler> ActorContext.sendService(message: Any, priority: MessagePriority = MessagePriority.NORMAL) = sendService(T::class, message, priority)
-
-inline fun <reified T : ActorHandler> ActorContext.getService() = getService(T::class)
 
 /**
  * High function proxy launch in coroutine scope to prevent coroutine accidentally leaked

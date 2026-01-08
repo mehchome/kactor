@@ -40,12 +40,6 @@ data class ActorRef(
         val EMPTY = ActorRef("")
 
         @JvmStatic
-        fun <T : ActorHandler> ofService(clazz: KClass<T>) = of("$clazz")
-
-        @JvmStatic
-        inline fun <reified T : ActorHandler> ofService() = ofService(T::class)
-
-        @JvmStatic
         fun of(actorId: String) = ActorRef(actorId)
     }
 }

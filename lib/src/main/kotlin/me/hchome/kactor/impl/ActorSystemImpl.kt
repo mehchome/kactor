@@ -13,7 +13,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.onClosed
-import kotlinx.coroutines.channels.onFailure
 import kotlinx.coroutines.channels.onSuccess
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -103,27 +102,19 @@ internal class ActorSystemImpl(
         kClass: KClass<T>
     ): ActorRef {
         val domain = this.findName(kClass) ?: throw ActorSystemException("Actor handler type not found: $kClass")
-        return actorOfSuspend(id ?: Uuid.random().toString(), parent, false, domain)
-    }
-
-    override suspend fun <T> serviceOfSuspend(
-        kClass: KClass<T>
-    ): ActorRef where T : ActorHandler {
-        val domain = this.findName(kClass) ?: throw ActorSystemException("Actor handler type not found: $kClass")
-        return actorOfSuspend("$kClass", ActorRef.EMPTY, true, domain)
+        return actorOfSuspend(id ?: Uuid.random().toString(), parent, domain)
     }
 
     private suspend fun actorOfSuspend(
         id: String,
         parent: ActorRef,
-        singleton: Boolean,
         domain: String,
     ): ActorRef {
         if (!runningFlag.load()) {
             throw ActorSystemException("Actor system not running")
         }
         val deferred = CompletableDeferred<ActorRef>()
-        val result = systemMailbox.trySend(CreateActor(id, parent, false, domain, deferred))
+        val result = systemMailbox.trySend(CreateActor(id, parent, domain, deferred))
         if (result.isFailure) {
             deferred.cancel(CancellationException(result.exceptionOrNull()?.message ?: "Actor creation failed"))
         }
@@ -131,10 +122,6 @@ internal class ActorSystemImpl(
             deferred.await()
         }
     }
-
-    override fun getServices(): Set<ActorRef> = actorRegistry.allSingletons
-
-    override fun getService(kClass: KClass<out ActorHandler>): ActorRef = actorRegistry.getSingleton(kClass)
 
     override fun start() {
         mailboxJob?.cancel()

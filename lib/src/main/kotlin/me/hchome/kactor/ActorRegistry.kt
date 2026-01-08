@@ -1,7 +1,6 @@
 package me.hchome.kactor
 
 import me.hchome.kactor.SystemMessage.CreateActor
-import kotlin.reflect.KClass
 
 /**
  * Registry for managing actors in the actor system. This interface provides methods to
@@ -20,7 +19,6 @@ interface ActorRegistry: ActorSystemInitializationListener {
     /**
      * get all singleton actors references
      */
-    val allSingletons: Set<ActorRef>
 
     /**
      * check if an actor exists
@@ -31,13 +29,6 @@ interface ActorRegistry: ActorSystemInitializationListener {
      * get child actor references
      */
     fun childReferences(parent: ActorRef): Set<ActorRef> = all.filter(parent::isChildOf).toSet()
-
-
-    /**
-     * Get a singleton actor reference
-     */
-    fun getSingleton(kClass: KClass<out ActorHandler>): ActorRef
-
 
     /**
      * create an actor
