@@ -20,6 +20,14 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         val (target, sender, message, priority) = tell
         actors[target]?.also { actor ->
             actor.send(message, sender, priority)
+        } ?: also {
+            actorSystem.notifySystem(
+                sender,
+                target,
+                "Message can't be delivered to $target",
+                ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED,
+                ActorSystemException("Actor[$target] not found")
+            )
         }
     }
 
@@ -27,11 +35,20 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         val (target, sender, message, priority, callback) = ask
         actors[target]?.also { actor ->
             actor.ask(message, sender, callback, priority)
+        } ?: also {
+            actorSystem.notifySystem(
+                sender,
+                target,
+                "Message can't be delivered to $target",
+                ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED,
+                ActorSystemException("Actor[$target] not found")
+            )
+            callback.completeExceptionally(ActorSystemException("Actor[$target] not found"))
         }
     }
 
     override fun createActor(message: SystemMessage.CreateActor) {
-        val (_, _, isSingleton, _, callback) = message
+        val (_, _, _, callback) = message
         val configHolder = actorSystem[message.domain]
         val (_, dispatcher, config, _, _) = configHolder
         val ref = createActorRef(message)
@@ -47,8 +64,8 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         val newHandler = message.handler
         val newAttributes = AttributesImpl()
         val newActor = Actor(
-            ref, isSingleton, message.domain, actorSystem, config.supervisorStrategy,
-            supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes
+            ref, message.domain, actorSystem, config.supervisorStrategy,
+            supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes, config.idle
         )
         // store all actor information
         actors[ref] = newActor
@@ -72,12 +89,17 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
 
     override fun stopActor(ref: ActorRef) {
         if (ref.isEmpty()) return
+        closeChannels(ref)
+        runtimeScopes[ref]?.cancel()
         childReferences(ref).forEach {
-            stopActor(it)
+            actorChannels[it]?.close()
+            runtimeScopes[it]?.cancel()
+            actorAttributes.remove(it)
+            actors.remove(it)
         }
-        actorChannels.remove(ref)?.close()
+        actorChannels.remove(ref)
         actorAttributes.remove(ref)
-        runtimeScopes.remove(ref)?.cancel()
+        runtimeScopes.remove(ref)
         actors.remove(ref)
         actorSystem.notifySystem(
             ActorRef.EMPTY,

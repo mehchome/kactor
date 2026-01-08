@@ -7,7 +7,6 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.produce
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.selects.select
 import me.hchome.kactor.MessagePriority
 
@@ -53,9 +52,10 @@ data class MailBox(
         }
     }
 
-    fun trySend(envelope: ActorEnvelope, priority: MessagePriority) = when (priority) {
-        MessagePriority.HIGH -> highPriorityChannel.trySend(envelope)
-        MessagePriority.NORMAL -> lowPriorityChannel.trySend(envelope)
+
+    suspend fun send(envelope: ActorEnvelope, priority: MessagePriority) = when (priority) {
+        MessagePriority.HIGH -> highPriorityChannel.send(envelope)
+        MessagePriority.NORMAL -> lowPriorityChannel.send(envelope)
     }
 
     fun close() {

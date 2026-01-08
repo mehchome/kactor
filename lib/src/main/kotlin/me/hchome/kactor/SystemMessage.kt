@@ -13,7 +13,6 @@ sealed interface SystemMessage {
     data class CreateActor(
         val id: String,
         val parent: ActorRef,
-        val singleton: Boolean,
         val domain: String,
         val callback: CompletableDeferred<ActorRef>
     ) : SystemMessage
