@@ -1,19 +1,13 @@
 package me.hchome.kactor.impl
 
-import jdk.jfr.internal.OldObjectSample.emit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.shareIn
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import me.hchome.kactor.ActorContext
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
@@ -21,7 +15,7 @@ import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
-import kotlin.coroutines.CoroutineContext
+import me.hchome.kactor.MessagePriority
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 
@@ -30,99 +24,56 @@ import kotlin.time.Duration
  * Open BaseActor's CoroutineScope to use it in the actor handler's methods.
  */
 internal data class ActorContextImpl(
-    private val self: BaseActor,
+    private val self: Actor,
     private val system: ActorSystem,
-    private val scope: CoroutineScope
-) : ActorContext,
-    Attributes by AttributesImpl() {
+    private val runtimeScope: ActorScope,
+    private val attributes: Attributes
+) : ActorContext, Attributes by attributes {
+
 
     override fun getService(kClass: KClass<out ActorHandler>): ActorRef = system.getService(kClass)
 
-    override val services: Set<ActorRef>
-        get() = system.getServices()
 
     override val ref: ActorRef
         get() = self.ref
 
     override val parent: ActorRef
-        get() = self.parent
-    override val children: Set<ActorRef>
-        get() = self.childrenRefs.toSet()
+        get() = self.ref.parentOf()
 
-    override fun <T : ActorHandler> sendService(kClass: KClass<out T>, message: Any) {
+    override val children: Set<ActorRef>
+        get() = system.childReferences(self.ref)
+
+    override fun <T : ActorHandler> sendService(kClass: KClass<out T>, message: Any, priority: MessagePriority) {
         val ref = ActorRef.ofService(kClass)
-        if (ref !in system) {
-            system.notifySystem(
-                self.ref, ActorRef.EMPTY,
-                "Target service $kClass is not found: $message",
-                ActorSystemNotificationMessage.NotificationType.ACTOR_EXCEPTION
-            )
-            return
-        }
-        system.send(ref, self.ref, message)
+        system.send(ref, self.ref, message, priority)
     }
 
-    override fun hasActor(ref: ActorRef): Boolean = ref in system
-
-    override fun sendChildren(message: Any) {
-        if (self.singleton) {
-            system.notifySystem(
-                self.ref, ActorRef.EMPTY,
-                "Target children shouldn't be a service: $message",
-                ActorSystemNotificationMessage.NotificationType.ACTOR_EXCEPTION
-            )
-            return
-        }
-        if (self.childrenRefs.isEmpty()) {
-            system.notifySystem(
-                self.ref, ActorRef.EMPTY,
-                "Send a message to an empty children: $message",
-                ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
-            )
-            return
-        }
-        self.childrenRefs.forEach {
-            system.send(it, self.ref, message)
+    override fun sendChildren(message: Any, priority: MessagePriority) {
+        children.forEach {
+            system.send(it, self.ref, message, priority)
         }
     }
 
     override fun getChild(id: String): ActorRef {
-        return children.firstOrNull { it.actorId.endsWith(id) } ?: ActorRef.EMPTY
+        return system.childReferences(self.ref).firstOrNull { it.name.contentEquals(id) } ?: ActorRef.EMPTY
     }
 
-    override fun sendChild(childRef: ActorRef, message: Any) {
-        if (self.singleton) {
-            return
-        }
-        self.childrenRefs.firstOrNull { it == childRef }?.also {
-            system.send(it, self.ref, message)
-        } ?: run {
-            system.notifySystem(
-                self.ref, ActorRef.EMPTY,
-                "Send a message to an empty child $childRef: $message",
-                ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
-            )
+    override fun sendChild(childRef: ActorRef, message: Any, priority: MessagePriority) {
+        children.firstOrNull { it == childRef }.also {
+            system.send(it ?: ActorRef.EMPTY, self.ref, message, priority)
         }
     }
 
-    override fun sendParent(message: Any) {
-        if (self.hasParent) {
-            system.send(self.parent, self.ref, message)
-        } else {
-            system.notifySystem(
-                self.ref, ActorRef.EMPTY,
-                "Send a message to an empty parent: $message",
-                ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
-            )
-        }
+    override fun sendParent(message: Any, priority: MessagePriority) {
+        system.send(self.ref.parentOf(), self.ref, message, priority)
     }
 
     override fun stopActor(ref: ActorRef) {
         system.destroyActor(ref)
     }
 
-    override fun sendSelf(message: Any) {
-        system.send(self.ref, self.ref, message)
+    override fun sendSelf(message: Any, priority: MessagePriority) {
+        system.send(self.ref, self.ref, message, priority)
     }
 
     override fun stopChild(childRef: ActorRef) {
@@ -135,7 +86,7 @@ internal data class ActorContextImpl(
 
 
     override fun stopChildren() {
-        self.childrenRefs.forEach {
+        children.forEach {
             system.destroyActor(it)
         }
     }
@@ -144,7 +95,6 @@ internal data class ActorContextImpl(
         id: String?,
         kClass: KClass<T>,
     ): ActorRef {
-        if (self.singleton) throw ActorSystemException("Can't create a child for a singleton actor")
         return system.actorOfSuspend(id, self.ref, kClass)
     }
 
@@ -159,38 +109,25 @@ internal data class ActorContextImpl(
         period: Duration,
         initDelay: Duration,
         block: suspend ActorHandler.(String) -> Unit
-    ): Job {
-        return self.schedule(period, initDelay, block)
-    }
+    ): Job = self.schedule(period, initDelay, block)
 
     override fun task(
         initDelay: Duration,
         block: suspend ActorHandler.(String) -> Unit
-    ): Job {
-        return self.task(initDelay, block)
+    ): Job = self.task(initDelay, block)
+
+    override fun sendActor(ref: ActorRef, message: Any, priority: MessagePriority) {
+        system.send(ref, self.ref, message, priority)
     }
 
-    override fun sendActor(ref: ActorRef, message: Any) {
-        try {
-            system.send(ref, self.ref, message)
-        } catch (e: IllegalStateException) {
-            system.notifySystem(
-                self.ref, ActorRef.EMPTY,
-                "Send a message to an empty actor $ref: $message",
-                ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
-            )
-            throw ActorSystemException("Send a message to an empty actor $ref: $message", e)
-        }
-    }
-
-    override fun <T : Any> ask(message: Any, ref: ActorRef, timeout: Duration): Deferred<T> {
+    override fun <T : Any> ask(message: Any, ref: ActorRef, priority: MessagePriority): Deferred<T> {
         if (ref == self.ref) {
             throw ActorSystemException("Can't ask self")
         } else if (ref == ActorRef.EMPTY) {
             throw ActorSystemException("Can't ask empty actor")
         }
         if (ref in system) {
-            return system.ask(ref, self.ref, message)
+            return system.ask(ref, self.ref, message, priority)
         } else {
             throw ActorSystemException("Actor not in system")
         }
@@ -201,24 +138,24 @@ internal data class ActorContextImpl(
     override fun launch(
         start: CoroutineStart,
         block: suspend CoroutineScope.() -> Unit
-    ): Job = scope.launch(start = start, block = block)
+    ): Job = runtimeScope.launch(started = start, block = block)
 
     override fun <T> async(
         start: CoroutineStart,
         block: suspend CoroutineScope.() -> T
-    ): Deferred<T> = scope.async(start = start, block = block)
+    ): Deferred<T> = runtimeScope.async(started = start, block = block)
 
     override fun <T> share(
         flow: Flow<T>,
         started: SharingStarted,
         replay: Int
-    ): SharedFlow<T> = flow.shareIn(scope, started, replay)
+    ): SharedFlow<T> = runtimeScope.share(flow, started, replay)
 
     override fun <T> state(
         flow: Flow<T>,
         stated: SharingStarted,
         initValue: T
-    ): StateFlow<T> = flow.stateIn(scope, stated, initValue)
+    ): StateFlow<T> = runtimeScope.state(flow, stated, initValue)
 
-    override suspend fun <T> state(flow: Flow<T>): StateFlow<T> = flow.stateIn(scope)
+    override suspend fun <T> state(flow: Flow<T>): StateFlow<T> = runtimeScope.state(flow)
 }

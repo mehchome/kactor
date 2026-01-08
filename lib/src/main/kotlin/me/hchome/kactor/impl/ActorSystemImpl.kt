@@ -3,21 +3,24 @@
 package me.hchome.kactor.impl
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.DisposableHandle
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.onClosed
+import kotlinx.coroutines.channels.onFailure
+import kotlinx.coroutines.channels.onSuccess
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
+import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorHandlerFactory
 import me.hchome.kactor.ActorHandlerRegistry
@@ -25,216 +28,210 @@ import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorRegistry
 import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
+import me.hchome.kactor.ActorSystemMessageListener
 import me.hchome.kactor.ActorSystemNotificationMessage
-import me.hchome.kactor.Attributes
-import me.hchome.kactor.RestartStrategy
-import me.hchome.kactor.RestartStrategy.AllForOne
-import me.hchome.kactor.RestartStrategy.Backoff
-import me.hchome.kactor.RestartStrategy.Escalate
-import me.hchome.kactor.RestartStrategy.OneForOne
-import me.hchome.kactor.RestartStrategy.Resume
-import me.hchome.kactor.RestartStrategy.Stop
-import me.hchome.kactor.isNotEmpty
+import me.hchome.kactor.MessagePriority
+import me.hchome.kactor.Supervisor
+import me.hchome.kactor.SupervisorStrategy
+import me.hchome.kactor.SystemMessage
+import me.hchome.kactor.SystemMessage.*
+import me.hchome.kactor.UserMessage
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import kotlin.coroutines.CoroutineContext
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.reflect.KClass
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
 /**
  * Actor system implementation
  */
+@OptIn(ExperimentalAtomicApi::class)
 internal class ActorSystemImpl(
-    dispatcher: CoroutineDispatcher,
     handlerFactory: ActorHandlerFactory,
-    actorRegistry: ActorRegistry,
-    val restartStrategy: RestartStrategy
-) :
-    ActorSystem,
-    ActorHandlerRegistry by ActorHandlerRegistryImpl(dispatcher, handlerFactory),
-    ActorRegistry by actorRegistry,
-    CoroutineScope,
-    DisposableHandle {
-    private val job = SupervisorJob()
-    override val coroutineContext: CoroutineContext = Dispatchers.Default + job
-    private val mutex = Mutex()
-    internal val _notifications = MutableSharedFlow<ActorSystemNotificationMessage>(0, 10, BufferOverflow.DROP_OLDEST)
-    override val notifications: Flow<ActorSystemNotificationMessage>
-        get() = _notifications
+    private val supervisorStrategy: SupervisorStrategy,
+    private val actorRegistry: ActorRegistry
+) : ActorSystem,
+    Supervisor,
+    ActorHandlerRegistry by ActorHandlerRegistryImpl(Dispatchers.Default, handlerFactory) {
+    private val systemJob = SupervisorJob()
+    private val systemScope = CoroutineScope(systemJob + Dispatchers.Default)
+    private val systemMailbox: Channel<SystemMessage> = Channel(64)
+    private val userMailbox: Channel<UserMessage> = Channel(1024)
 
-    override fun dispose() {
-        clear()
-        coroutineContext.cancel()
+    val all: Set<ActorRef> get() = actorRegistry.all
+
+    private var mailboxJob: Job? = null
+
+    private val listeners = mutableListOf<ActorSystemMessageListener>()
+
+    private val runningFlag = AtomicBoolean(false)
+
+    init {
+        actorRegistry.afterInit(this, systemJob, this)
     }
 
+
+    override fun contains(ref: ActorRef): Boolean = actorRegistry.contains(ref)
+
+    override fun addListener(listener: ActorSystemMessageListener) {
+        listeners.add(listener)
+    }
+
+    override fun childReferences(parent: ActorRef): Set<ActorRef> = actorRegistry.childReferences(parent)
+
+    override suspend fun processFailure(
+        ref: ActorRef,
+        decision: SupervisorStrategy.Decision
+    ) {
+        when (decision) {
+            SupervisorStrategy.Decision.Resume -> {}
+            SupervisorStrategy.Decision.Stop -> systemMailbox.send(StopActor(ref))
+            SupervisorStrategy.Decision.Recreate -> systemMailbox.send(RestartActor(ref, true))
+            SupervisorStrategy.Decision.Restart -> systemMailbox.send(RestartActor(ref, false))
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class, ExperimentalUuidApi::class)
     override suspend fun <T : ActorHandler> actorOfSuspend(
         id: String?,
         parent: ActorRef,
         kClass: KClass<T>
-    ): ActorRef = actorOfSuspend(id, false, parent, kClass)
+    ): ActorRef {
+        val domain = this.findName(kClass) ?: throw ActorSystemException("Actor handler type not found: $kClass")
+        return actorOfSuspend(id ?: Uuid.random().toString(), parent, false, domain)
+    }
 
     override suspend fun <T> serviceOfSuspend(
         kClass: KClass<T>
-    ): ActorRef where T : ActorHandler = actorOfSuspend(null, true, ActorRef.Companion.EMPTY, kClass)
-
-    override fun getServices(): Set<ActorRef> {
-        return all().filter { it.singleton }.map { it.ref }.toSet()
-    }
-
-    override fun getService(kClass: KClass<out ActorHandler>): ActorRef {
-        return all().firstOrNull {
-            it.ref.actorId == "$kClass" &&
-                    it.singleton
-        }?.ref ?: ActorRef.EMPTY
-    }
-
-    override suspend fun recover(child: ActorRef, attributes: Attributes) {
-        this[child].recover(attributes)
-    }
-
-    override suspend fun snapshot(child: ActorRef): Attributes? {
-        return try {
-            this[child].snapshot()
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
-    override suspend fun supervise(
-        child: ActorRef,
-        singleton: Boolean,
-        cause: Throwable
-    ) {
-        val actor = this[child]
-        if (LOGGER.isDebugEnabled) {
-            LOGGER.debug("Supervise actor ${child.actorId} with restart strategy ${restartStrategy.javaClass.simpleName}")
-        }
-        when (restartStrategy) {
-            is OneForOne, is AllForOne, is Escalate -> {
-                val attributes = snapshot(child)
-                destroyActor(child)
-                val new = if (singleton) {
-                    serviceOfSuspend(actor.handlerClass)
-                } else {
-                    actorOfSuspend(child.name, ActorRef.EMPTY, actor.handlerClass)
-                }
-                if (attributes != null) {
-                    recover(new, attributes)
-                }
-            }
-
-            is Resume -> {}
-            is Stop -> destroyActor(child)
-            is Backoff -> {
-                val (init, max) = restartStrategy
-                val attributes = snapshot(child)
-                delay(init)
-                destroyActor(child)
-                delay(max)
-                val new = if (singleton) {
-                    serviceOfSuspend(actor.handlerClass)
-                } else {
-                    actorOfSuspend(child.name, ActorRef.EMPTY, actor.handlerClass)
-                }
-                if (attributes != null) {
-                    recover(new, attributes)
-                }
-            }
-        }
-    }
-
-    private fun <T> actorOfSuspend(
-        id: String?,
-        singleton: Boolean,
-        parent: ActorRef,
-        kClass: KClass<T>
     ): ActorRef where T : ActorHandler {
-        val parentActor = if (parent.isNotEmpty()) this[parent] else null
-        val actorId = buildActorId(parent, id, singleton, kClass)
+        val domain = this.findName(kClass) ?: throw ActorSystemException("Actor handler type not found: $kClass")
+        return actorOfSuspend("$kClass", ActorRef.EMPTY, true, domain)
+    }
 
-        val config = this[kClass]
-        val actorDispatcher = config.dispatcher
-        if (parentActor != null && parentActor.singleton) {
-            throw ActorSystemException("Parent actor is a singleton actor")
+    private suspend fun actorOfSuspend(
+        id: String,
+        parent: ActorRef,
+        singleton: Boolean,
+        domain: String,
+    ): ActorRef {
+        if (!runningFlag.load()) {
+            throw ActorSystemException("Actor system not running")
         }
+        val deferred = CompletableDeferred<ActorRef>()
+        val result = systemMailbox.trySend(CreateActor(id, parent, false, domain, deferred))
+        if (result.isFailure) {
+            deferred.cancel(CancellationException(result.exceptionOrNull()?.message ?: "Actor creation failed"))
+        }
+        return withTimeout(1.minutes) {
+            deferred.await()
+        }
+    }
 
-        val ref = ActorRef(actorId)
-        if (contains(ref)) {
-            if (singleton) {
-                return ref
-            } else {
-                throw ActorSystemException("Actor with id $actorId already exists")
+    override fun getServices(): Set<ActorRef> = actorRegistry.allSingletons
+
+    override fun getService(kClass: KClass<out ActorHandler>): ActorRef = actorRegistry.getSingleton(kClass)
+
+    override fun start() {
+        mailboxJob?.cancel()
+        mailboxJob = systemScope.launch {
+            try {
+                while (isActive) {
+                    systemMailbox.tryReceive().getOrNull()?.also {
+                        handleSystemMessage(it)
+                        continue
+                    }
+                    select {
+                        systemMailbox.onReceiveCatching { result ->
+                            result.onSuccess {
+                                handleSystemMessage(it)
+                            }.onClosed {
+                                notifySystem(
+                                    ActorRef.EMPTY,
+                                    ActorRef.EMPTY,
+                                    "ActorSystem system mailbox closed",
+                                    ActorSystemNotificationMessage.NotificationType.SYSTEM_CLOSE
+                                )
+                            }
+                        }
+                        userMailbox.onReceiveCatching { result ->
+                            result.onSuccess {
+                                handleUserMessage(it)
+                            }.onClosed {
+                                notifySystem(
+                                    ActorRef.EMPTY,
+                                    ActorRef.EMPTY,
+                                    "ActorSystem user mailbox closed",
+                                    ActorSystemNotificationMessage.NotificationType.SYSTEM_CLOSE
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                LOGGER.debug("Actor system mailbox job cancelled")
+                throw e
             }
         }
+        runningFlag.compareAndExchange(expectedValue = false, newValue = true)
+    }
 
-        val actor = createActor(
-            actorDispatcher, kClass, config.factory, this@ActorSystemImpl, actorId, config.config,
-            singleton, parentActor
-        )
-        this[actor.ref] = actor
-        this@ActorSystemImpl.notifySystem(
-            actor.ref, ActorRef.EMPTY, "Actor created",
-            ActorSystemNotificationMessage.NotificationType.ACTOR_CREATED
-        )
-        return actor.ref
+    override fun shutdownGracefully() = runBlocking {
+        systemMailbox.close()
+        mailboxJob?.cancelAndJoin()
+        actorRegistry.stopAllActors()
+        systemJob.cancelAndJoin()
+        systemScope.cancel()
     }
 
     override fun destroyActor(actorRef: ActorRef) {
-        this.remove(actorRef)?.dispose()
-        notifySystem(
-            actorRef,
-            ActorRef.EMPTY,
-            "Actor destroyed",
-            ActorSystemNotificationMessage.NotificationType.ACTOR_DESTROYED
-        )
+        val result = systemMailbox.trySend(StopActor(actorRef))
+        if (result.isFailure) {
+            LOGGER.warn("Failed to destroy actor $actorRef: ${result.exceptionOrNull()?.message}")
+        }
     }
 
-    override fun send(actorRef: ActorRef, sender: ActorRef, message: Any) {
-        this[actorRef].send(message, sender)
+    override fun send(actorRef: ActorRef, sender: ActorRef, message: Any, priority: MessagePriority) {
+        if (!runningFlag.load()) {
+            throw ActorSystemException("Actor system not running")
+        }
+        val result = userMailbox.trySend(UserMessage.Tell(actorRef, sender, message, priority))
+        if (result.isFailure) {
+            notifySystem(
+                sender,
+                actorRef,
+                "Actor mailbox full, $message",
+                ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
+            )
+        }
     }
 
-    override fun <T : Any> ask(actorRef: ActorRef, sender: ActorRef, message: Any, timeout: Duration): Deferred<T> =
-        async {
-            val actor = this@ActorSystemImpl[actorRef]
-            val deferred = CompletableDeferred<T>()
-            try {
-                withTimeout(timeout) {
-                    actor.ask<T>(message, sender, deferred)
-                    deferred.await()
-                }
-            } catch (e: TimeoutCancellationException) {
-                notifySystem(
-                    sender,
-                    actorRef,
-                    "Actor timeout",
-                    ActorSystemNotificationMessage.NotificationType.ACTOR_TIMEOUT,
-                )
-                throw ActorSystemException("Actor timeout")
-            }
-        }
 
-    @OptIn(ExperimentalUuidApi::class)
-    private fun buildActorId(
-        parent: ActorRef?,
-        id: String?,
-        singleton: Boolean,
-        kClass: KClass<*>
-    ): String {
-        if (!id.isNullOrBlank() && id.contains('/')) {
-            throw ActorSystemException("Actor id cannot contain '/'")
+    override fun <T : Any> ask(
+        actorRef: ActorRef,
+        sender: ActorRef,
+        message: Any,
+        priority: MessagePriority,
+    ): Deferred<T> {
+        if (!runningFlag.load()) {
+            throw ActorSystemException("Actor system not running")
         }
-        val baseId = when {
-            id.isNullOrBlank() && !singleton -> "actor-${Uuid.random()}"
-            id.isNullOrBlank() -> "$kClass"
-            else -> id
+        val deferred = CompletableDeferred<T>()
+        val result = userMailbox.trySend(UserMessage.Ask(actorRef, sender, message, priority, deferred))
+        if (result.isFailure) {
+            notifySystem(
+                sender,
+                actorRef,
+                "Actor mailbox full, $message",
+                ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
+            )
+            deferred.cancel(CancellationException(result.exceptionOrNull()?.message ?: "Actor mailbox full, $message"))
         }
-        return if (parent != null && parent.isNotEmpty()) {
-            "${parent.actorId}/$baseId"
-        } else {
-            baseId
-        }
+        return deferred
     }
 
     override fun notifySystem(
@@ -253,12 +250,68 @@ internal class ActorSystemImpl(
 
             ActorSystemNotificationMessage.NotificationType.ACTOR_MESSAGE,
             ActorSystemNotificationMessage.NotificationType.ACTOR_CREATED,
+            ActorSystemNotificationMessage.NotificationType.ACTOR_RESTARTED,
+            ActorSystemNotificationMessage.NotificationType.SYSTEM_CLOSE,
             ActorSystemNotificationMessage.NotificationType.ACTOR_DESTROYED -> ActorSystemNotificationMessage.MessageLevel.INFO
 
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL -> ActorSystemNotificationMessage.MessageLevel.ERROR
+            ActorSystemNotificationMessage.NotificationType.SYSTEM_ERROR -> ActorSystemNotificationMessage.MessageLevel.ERROR
         }
-        val notification = ActorSystemNotificationMessage(sender, receiver, level, message, throwable)
-        _notifications.tryEmit(notification)
+        val notification = ActorSystemNotificationMessage(notificationType, sender, receiver, level, message, throwable)
+        listeners.forEach { listener ->
+            listener.onMessage(notification)
+        }
+    }
+
+    override suspend fun supervise(
+        child: ActorRef,
+        sender: ActorRef,
+        message: Any,
+        cause: Throwable
+    ): SupervisorStrategy.Decision {
+        return when (supervisorStrategy) {
+            is SupervisorStrategy.AllForOne, is SupervisorStrategy.Escalate -> { // System cannot do crazy thing just fall back to OneForOne
+                SupervisorStrategy.OneForOne.decide(ActorFailure(this, child, sender, message, cause, this))
+            }
+
+            is SupervisorStrategy.Resume -> SupervisorStrategy.Decision.Resume
+            else -> {
+                supervisorStrategy.onFailure(ActorFailure(this, child, sender, message, cause, this))
+            }
+        }
+    }
+
+    private suspend fun handleSystemMessage(message: SystemMessage): Unit = try {
+        when (message) {
+            is CreateActor -> actorRegistry.createActor(message)
+            is StopActor -> actorRegistry.stopActor(message.ref)
+            is RestartActor -> actorRegistry.restartActor(message.ref, message.recreate)
+        }
+    } catch (e: Throwable) {
+        notifySystem(
+            ActorRef.EMPTY,
+            ActorRef.EMPTY,
+            e.message ?: "Actor system exception",
+            ActorSystemNotificationMessage.NotificationType.SYSTEM_ERROR,
+            e
+        )
+    }
+
+    private suspend fun handleUserMessage(message: UserMessage): Unit = when (message) {
+        is UserMessage.Tell -> actorRegistry.tell(message)
+        is UserMessage.Ask -> actorRegistry.ask(message)
+    }
+
+    private fun onUndeliveredMessage(wrapper: ActorEnvelope, ref: ActorRef) {
+        val message = wrapper.message
+        val sender = wrapper.sender
+        val formattedMessage = "Undelivered message: $message"
+        notifySystem(
+            sender,
+            ActorRef.EMPTY,
+            formattedMessage,
+            ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
+        )
     }
 
     companion object {
