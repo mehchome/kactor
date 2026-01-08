@@ -15,6 +15,7 @@ import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
+import me.hchome.kactor.MessagePriority
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 
@@ -42,14 +43,14 @@ internal data class ActorContextImpl(
     override val children: Set<ActorRef>
         get() = system.childReferences(self.ref)
 
-    override fun <T : ActorHandler> sendService(kClass: KClass<out T>, message: Any) {
+    override fun <T : ActorHandler> sendService(kClass: KClass<out T>, message: Any, priority: MessagePriority) {
         val ref = ActorRef.ofService(kClass)
-        system.send(ref, self.ref, message)
+        system.send(ref, self.ref, message, priority)
     }
 
-    override fun sendChildren(message: Any) {
+    override fun sendChildren(message: Any, priority: MessagePriority) {
         children.forEach {
-            system.send(it, self.ref, message)
+            system.send(it, self.ref, message, priority)
         }
     }
 
@@ -57,22 +58,22 @@ internal data class ActorContextImpl(
         return system.childReferences(self.ref).firstOrNull { it.name.contentEquals(id) } ?: ActorRef.EMPTY
     }
 
-    override fun sendChild(childRef: ActorRef, message: Any) {
+    override fun sendChild(childRef: ActorRef, message: Any, priority: MessagePriority) {
         children.firstOrNull { it == childRef }.also {
-            system.send(it ?: ActorRef.EMPTY, self.ref, message)
+            system.send(it ?: ActorRef.EMPTY, self.ref, message, priority)
         }
     }
 
-    override fun sendParent(message: Any) {
-        system.send(self.ref.parentOf(), self.ref, message)
+    override fun sendParent(message: Any, priority: MessagePriority) {
+        system.send(self.ref.parentOf(), self.ref, message, priority)
     }
 
     override fun stopActor(ref: ActorRef) {
         system.destroyActor(ref)
     }
 
-    override fun sendSelf(message: Any) {
-        system.send(self.ref, self.ref, message)
+    override fun sendSelf(message: Any, priority: MessagePriority) {
+        system.send(self.ref, self.ref, message, priority)
     }
 
     override fun stopChild(childRef: ActorRef) {
@@ -115,18 +116,18 @@ internal data class ActorContextImpl(
         block: suspend ActorHandler.(String) -> Unit
     ): Job = self.task(initDelay, block)
 
-    override fun sendActor(ref: ActorRef, message: Any) {
-        system.send(ref, self.ref, message)
+    override fun sendActor(ref: ActorRef, message: Any, priority: MessagePriority) {
+        system.send(ref, self.ref, message, priority)
     }
 
-    override fun <T : Any> ask(message: Any, ref: ActorRef, timeout: Duration): Deferred<T> {
+    override fun <T : Any> ask(message: Any, ref: ActorRef, priority: MessagePriority): Deferred<T> {
         if (ref == self.ref) {
             throw ActorSystemException("Can't ask self")
         } else if (ref == ActorRef.EMPTY) {
             throw ActorSystemException("Can't ask empty actor")
         }
         if (ref in system) {
-            return system.ask(ref, self.ref, message)
+            return system.ask(ref, self.ref, message, priority)
         } else {
             throw ActorSystemException("Actor not in system")
         }

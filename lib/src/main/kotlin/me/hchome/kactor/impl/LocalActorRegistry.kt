@@ -1,6 +1,5 @@
 package me.hchome.kactor.impl
 
-import kotlinx.coroutines.channels.Channel
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
@@ -10,25 +9,24 @@ import me.hchome.kactor.SystemMessage
 import me.hchome.kactor.UserMessage
 import me.hchome.kactor.isEmpty
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.collections.remove
 
 internal class LocalActorRegistry : AbstractActorRegistry() {
     override val actors = ConcurrentHashMap<ActorRef, Actor>()
     override val runtimeScopes = ConcurrentHashMap<ActorRef, ActorScope>()
-    override val actorChannels = ConcurrentHashMap<ActorRef, Channel<ActorEnvelope>>()
+    override val actorChannels = ConcurrentHashMap<ActorRef, MailBox>()
     override val actorAttributes = ConcurrentHashMap<ActorRef, Attributes>()
 
     override suspend fun tell(tell: UserMessage.Tell) {
-        val (target, sender, message) = tell
+        val (target, sender, message, priority) = tell
         actors[target]?.also { actor ->
-            actor.send(message, sender)
+            actor.send(message, sender, priority)
         }
     }
 
     override suspend fun ask(ask: UserMessage.Ask) {
-        val (target, sender, message, callback) = ask
+        val (target, sender, message, priority, callback) = ask
         actors[target]?.also { actor ->
-            actor.ask(message, sender, callback)
+            actor.ask(message, sender, callback, priority)
         }
     }
 
@@ -61,7 +59,12 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         try {
             newActor.startActor()
             callback.complete(ref)
-            actorSystem.notifySystem(ActorRef.EMPTY, ref, "Actor[$ref] created", ActorSystemNotificationMessage.NotificationType.ACTOR_CREATED)
+            actorSystem.notifySystem(
+                ActorRef.EMPTY,
+                ref,
+                "Actor[$ref] created",
+                ActorSystemNotificationMessage.NotificationType.ACTOR_CREATED
+            )
         } catch (e: Throwable) {
             callback.completeExceptionally(e)
         }
@@ -76,17 +79,24 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         actorAttributes.remove(ref)
         runtimeScopes.remove(ref)?.cancel()
         actors.remove(ref)
-        actorSystem.notifySystem(ActorRef.EMPTY, ref, "Actor[$ref] stopped", ActorSystemNotificationMessage.NotificationType.ACTOR_DESTROYED)
+        actorSystem.notifySystem(
+            ActorRef.EMPTY,
+            ref,
+            "Actor[$ref] stopped",
+            ActorSystemNotificationMessage.NotificationType.ACTOR_DESTROYED
+        )
     }
 
-    override fun restartActor(ref: ActorRef) {
+    override fun restartActor(ref: ActorRef, recreate: Boolean) {
         if (ref.isEmpty()) return
         actors[ref] ?: return
         val runtimeScope = runtimeScopes[ref] ?: return
         closeChannels(ref)
         runtimeScope.cancel()
         // rebuild actor environment
-        rebuildChannels(ref)
+        if (recreate) {
+            rebuildChannels(ref)
+        }
         rebuildActorScope(ref)
         rebuildAttributeStore(ref)
         // rebuild actor objects
@@ -108,7 +118,12 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
 
     private fun startActorRecursive(ref: ActorRef) {
         actors[ref]?.startActor()
-        actorSystem.notifySystem(ActorRef.EMPTY, ref, "Actor[$ref] restarted", ActorSystemNotificationMessage.NotificationType.ACTOR_RESTARTED)
+        actorSystem.notifySystem(
+            ActorRef.EMPTY,
+            ref,
+            "Actor[$ref] restarted",
+            ActorSystemNotificationMessage.NotificationType.ACTOR_RESTARTED
+        )
         childReferences(ref).forEach { startActorRecursive(it) }
     }
 }

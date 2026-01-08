@@ -11,7 +11,7 @@ package me.hchome.kactor
  */
 sealed interface SupervisorStrategy {
 
-    suspend fun onFailure(failure: ActorFailure) {
+    suspend fun onFailure(failure: ActorFailure): Decision {
         val system = failure.system
         system.notifySystem(
             failure.sender,
@@ -20,27 +20,38 @@ sealed interface SupervisorStrategy {
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL,
             failure.cause
         )
+        return decide(failure)
     }
 
-    suspend fun decide(failure: ActorFailure)
+    suspend fun decide(failure: ActorFailure): Decision
 
     object OneForOne : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure) {
+        override suspend fun decide(failure: ActorFailure): Decision {
+            val system = failure.system
+            system.processFailure(failure.ref, Decision.Recreate)
+            return Decision.Recreate
+        }
+    }
+
+    object OneForOneRetained : SupervisorStrategy {
+        override suspend fun decide(failure: ActorFailure): Decision {
             val system = failure.system
             system.processFailure(failure.ref, Decision.Restart)
+            return Decision.Restart
         }
     }
 
     object AllForOne : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure) {
+        override suspend fun decide(failure: ActorFailure): Decision {
             val system = failure.system
             val parentRef = failure.ref.parentOf()
-            if (parentRef.isNotEmpty()) {
+            return if (parentRef.isNotEmpty()) {
                 val allChildReferences = system.childReferences(parentRef)
                 for (childRef in allChildReferences) {
                     // send restart messages to all children
                     system.processFailure(childRef, Decision.Restart)
                 }
+                Decision.Restart
             } else { // the root actor falls back to OneForOne
                 OneForOne.decide(failure)
             }
@@ -48,25 +59,27 @@ sealed interface SupervisorStrategy {
     }
 
     object Resume : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure) {
+        override suspend fun decide(failure: ActorFailure): Decision {
             // Report sent, no need to do anything
+            return Decision.Resume
         }
     }
 
     object Stop : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure) {
+        override suspend fun decide(failure: ActorFailure): Decision {
             val system = failure.system
             system.processFailure(failure.ref, Decision.Stop)
+            return Decision.Stop
         }
     }
 
     object Escalate : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure) {
-            failure.supervisor.supervise(failure.ref, failure.sender, failure.message, failure.cause)
+        override suspend fun decide(failure: ActorFailure): Decision {
+            return failure.supervisor.supervise(failure.ref, failure.sender, failure.message, failure.cause)
         }
     }
 
     enum class Decision {
-        Restart, Stop
+        Recreate, Restart, Stop, Resume
     }
 }

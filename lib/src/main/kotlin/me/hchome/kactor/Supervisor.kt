@@ -15,5 +15,5 @@ interface Supervisor {
         sender: ActorRef,
         message: Any,
         cause: Throwable,
-    )
+    ): SupervisorStrategy.Decision
 }

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
+import me.hchome.kactor.MessagePriority
 import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 import kotlin.time.Duration
@@ -129,22 +130,22 @@ interface ActorContext : Attributes {
     /**
      * Send a message to a service actor
      */
-    fun <T : ActorHandler> sendService(kClass: KClass<out T>, message: Any)
+    fun <T : ActorHandler> sendService(kClass: KClass<out T>, message: Any, priority: MessagePriority = MessagePriority.NORMAL)
 
     /**
      * Send a message to any actor
      */
-    fun sendActor(ref: ActorRef, message: Any)
+    fun sendActor(ref: ActorRef, message: Any, priority: MessagePriority = MessagePriority.NORMAL)
 
     /**
      * Send a message to all children actors
      */
-    fun sendChildren(message: Any)
+    fun sendChildren(message: Any, priority: MessagePriority = MessagePriority.NORMAL)
 
     /**
      * Send a message to a child actor
      */
-    fun sendChild(childRef: ActorRef, message: Any)
+    fun sendChild(childRef: ActorRef, message: Any, priority: MessagePriority = MessagePriority.NORMAL)
 
     /**
      * Get a child actor reference
@@ -155,17 +156,17 @@ interface ActorContext : Attributes {
     /**
      * Send a message to the parent actor
      */
-    fun sendParent(message: Any)
+    fun sendParent(message: Any, priority: MessagePriority = MessagePriority.NORMAL)
 
     /**
      * Send a message to the self-actor
      */
-    fun sendSelf(message: Any)
+    fun sendSelf(message: Any, priority: MessagePriority = MessagePriority.NORMAL)
 
     /**
      * Send a message to the actor (not self) and wait for a response
      */
-    fun <T : Any> ask(message: Any, ref: ActorRef, timeout: Duration = Duration.INFINITE): Deferred<T>
+    fun <T : Any> ask(message: Any, ref: ActorRef, priority: MessagePriority = MessagePriority.NORMAL): Deferred<T>
 
     /**
      * Stop a child actor
@@ -237,7 +238,7 @@ suspend inline fun <reified T : ActorHandler> ActorContext.newActor(id: String? 
 
 suspend inline fun <reified T : ActorHandler> ActorContext.newService(): ActorRef = newService(T::class)
 
-inline fun <reified T : ActorHandler> ActorContext.sendService(message: Any) = sendService(T::class, message)
+inline fun <reified T : ActorHandler> ActorContext.sendService(message: Any, priority: MessagePriority = MessagePriority.NORMAL) = sendService(T::class, message, priority)
 
 inline fun <reified T : ActorHandler> ActorContext.getService() = getService(T::class)
 

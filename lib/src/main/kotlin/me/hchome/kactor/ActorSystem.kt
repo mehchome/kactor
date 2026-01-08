@@ -6,6 +6,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.runBlocking
 import me.hchome.kactor.impl.ActorSystemImpl
 import me.hchome.kactor.impl.LocalActorRegistry
+import me.hchome.kactor.MessagePriority
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 
@@ -74,14 +75,15 @@ interface ActorSystem : ActorHandlerRegistry {
      * @param sender sender actor reference
      * @param message message
      */
-    fun send(actorRef: ActorRef, sender: ActorRef, message: Any)
+    fun send(actorRef: ActorRef, sender: ActorRef, message: Any, priority: MessagePriority = MessagePriority.NORMAL)
 
     /**
      * send a message to an actor
      * @param actorRef actor reference
      * @param message message
      */
-    fun send(actorRef: ActorRef, message: Any) = send(actorRef, ActorRef.EMPTY, message)
+    fun send(actorRef: ActorRef, message: Any, priority: MessagePriority = MessagePriority.NORMAL) =
+        send(actorRef, ActorRef.EMPTY, message, priority)
 
 
     /**
@@ -96,7 +98,7 @@ interface ActorSystem : ActorHandlerRegistry {
         actorRef: ActorRef,
         sender: ActorRef,
         message: Any,
-        timeout: Duration = Duration.INFINITE
+        priority: MessagePriority = MessagePriority.NORMAL,
     ): Deferred<T>
 
     /**

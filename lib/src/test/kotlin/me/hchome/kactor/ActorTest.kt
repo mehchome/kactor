@@ -306,7 +306,9 @@ class ActorTest {
             SYSTEM = ActorSystem.createOrGet()
             SYSTEM.register<TestActor>(TestActor::class.simpleName!!)
             SYSTEM.register<TestActor2>(TestActor2::class.simpleName!!)
-            SYSTEM.register<TestActor3>(TestActor3::class.simpleName!!)
+            SYSTEM.register<TestActor3>(TestActor3::class.simpleName!!, config = ActorConfig(
+                supervisorStrategy = SupervisorStrategy.OneForOneRetained
+            ))
             SYSTEM.register<TestActor4>(TestActor4::class.simpleName!!)
 
             SYSTEM += ActorSystemMessageListener {

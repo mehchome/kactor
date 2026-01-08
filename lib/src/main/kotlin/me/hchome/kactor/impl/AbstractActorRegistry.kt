@@ -1,9 +1,7 @@
 package me.hchome.kactor.impl
 
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
 import me.hchome.kactor.ActorHandler
-import me.hchome.kactor.ActorHandlerConfigHolder
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorRegistry
 import me.hchome.kactor.ActorSystem
@@ -22,7 +20,7 @@ abstract class AbstractActorRegistry : ActorRegistry {
 
     protected abstract val actors: MutableMap<ActorRef, Actor>
     protected abstract val runtimeScopes: MutableMap<ActorRef, ActorScope>
-    protected abstract val actorChannels: MutableMap<ActorRef, Channel<ActorEnvelope>>
+    protected abstract val actorChannels: MutableMap<ActorRef, MailBox>
     protected abstract val actorAttributes: MutableMap<ActorRef, Attributes>
 
     protected lateinit var actorSystem: ActorSystem
@@ -64,29 +62,27 @@ abstract class AbstractActorRegistry : ActorRegistry {
     protected fun buildActorId(
         parent: ActorRef,
         id: String,
-        singleton: Boolean,
-        domain: String,
     ): ActorRef = if (parent.isNotEmpty()) {
         parent.childOf(id)
     } else {
         ActorRef.of(id)
     }
 
-    protected fun createChannel(message: CreateActor, ref: ActorRef): Channel<ActorEnvelope> {
+    protected fun createChannel(message: CreateActor, ref: ActorRef): MailBox {
         val config = actorSystem[message.domain].config
-        return Channel(config.capacity, config.onBufferOverflow) {
+        return MailBox(config.capacity, config.onBufferOverflow) {
             onUndeliveredMessage(it, ref)
         }
     }
 
     protected fun createActorRef(message: CreateActor): ActorRef {
-        val (id, parentRef, isSingleton, domain, _) = message
-        return buildActorId(parentRef, id, isSingleton, domain)
+        val (id, parentRef, _, _, _) = message
+        return buildActorId(parentRef, id)
     }
 
     protected fun rebuildChannels(ref: ActorRef) {
         val config = actors[ref]?.domain?.let { actorSystem[it].config } ?: return
-        val channel = Channel<ActorEnvelope>(config.capacity, config.onBufferOverflow) {
+        val channel = MailBox(config.capacity, config.onBufferOverflow) {
             onUndeliveredMessage(it, ref)
         }
         actorChannels[ref] = channel
@@ -145,7 +141,6 @@ abstract class AbstractActorRegistry : ActorRegistry {
             ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
         )
     }
-
 
     protected val CreateActor.handler: ActorHandler
         get() = actorSystem[domain].newActorHandler()

@@ -4,11 +4,17 @@ package me.hchome.kactor.impl
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.actor
+import kotlinx.coroutines.channels.onFailure
+import kotlinx.coroutines.channels.onSuccess
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
@@ -17,6 +23,7 @@ import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
+import me.hchome.kactor.MessagePriority
 import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SupervisorStrategy
 import me.hchome.kactor.TaskInfo
@@ -40,7 +47,7 @@ class Actor internal constructor(
     private val actorSystem: ActorSystem,
     private val supervisorStrategy: SupervisorStrategy,
     private val supervisor: Supervisor,
-    private val mailbox: Channel<ActorEnvelope>,
+    private val mailbox: MailBox,
     private val runtimeScope: ActorScope,
     private val handler: ActorHandler,
     private val attributes: Attributes
@@ -62,23 +69,38 @@ class Actor internal constructor(
     }
 
 
-    fun send(message: Any, sender: ActorRef) {
-        val result = mailbox.trySend(ActorEnvelope.SendActorEnvelope(message, sender))
+    fun send(message: Any, sender: ActorRef, priority: MessagePriority = MessagePriority.NORMAL) {
+        val result = mailbox.trySend(ActorEnvelope.SendActorEnvelope(message, sender), priority)
         if (result.isFailure) {
             runtimeScope.launch {
                 withContext(NonCancellable) {
-                    supervisor.supervise(ref, sender, message, result.exceptionOrNull() ?: ActorSystemException("Unknown error"))
+                    supervisor.supervise(
+                        ref,
+                        sender,
+                        message,
+                        result.exceptionOrNull() ?: ActorSystemException("Unknown error")
+                    )
                 }
             }
         }
     }
 
-    fun <T : Any> ask(message: Any, sender: ActorRef, callback: CompletableDeferred<in T>) {
-        val result = mailbox.trySend(ActorEnvelope.AskActorEnvelope(message, sender, callback))
+    fun <T : Any> ask(
+        message: Any,
+        sender: ActorRef,
+        callback: CompletableDeferred<in T>,
+        priority: MessagePriority = MessagePriority.NORMAL
+    ) {
+        val result = mailbox.trySend(ActorEnvelope.AskActorEnvelope(message, sender, callback), priority)
         if (result.isFailure) {
             runtimeScope.launch {
                 withContext(NonCancellable) {
-                    supervisor.supervise(ref, sender, message, result.exceptionOrNull() ?: ActorSystemException("Unknown error"))
+                    supervisor.supervise(
+                        ref,
+                        sender,
+                        message,
+                        result.exceptionOrNull() ?: ActorSystemException("Unknown error")
+                    )
                 }
             }
         }
@@ -116,10 +138,11 @@ class Actor internal constructor(
     @Suppress("UNCHECKED_CAST")
     fun startActor() {
         mailBoxJob = runtimeScope.launch {
+            val receiveChannel = with(mailbox) { this@launch.selectMailbox() }
             context(context) {
                 try {
                     handler.preStart()
-                    for (msg in mailbox) {
+                    for (msg in receiveChannel) {
                         val message = msg.message
                         val sender = msg.sender
                         try {
@@ -133,8 +156,13 @@ class Actor internal constructor(
                             }
                         } catch (e: CancellationException) {
                             LOGGER.debug("Actor cancelled: {}", ref, e)
+                            throw e
                         } catch (e: Throwable) {
-                            supervisor.supervise(ref, sender, message, e)
+                            val decision = supervisor.supervise(ref, sender, message, e)
+                            when (decision) {
+                                SupervisorStrategy.Decision.Resume -> continue
+                                else -> break
+                            }
                         }
                     }
                 } finally {
@@ -151,8 +179,8 @@ class Actor internal constructor(
         sender: ActorRef,
         message: Any,
         cause: Throwable
-    ) {
-        supervisorStrategy.onFailure(ActorFailure(actorSystem, child, sender, message, cause, supervisor))
+    ): SupervisorStrategy.Decision {
+        return supervisorStrategy.onFailure(ActorFailure(actorSystem, child, sender, message, cause, supervisor))
     }
 
     companion object {

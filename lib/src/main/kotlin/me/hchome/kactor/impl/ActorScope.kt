@@ -20,6 +20,8 @@ import kotlin.coroutines.EmptyCoroutineContext
 interface ActorScope {
     val actorJob: Job
 
+    fun <R> inScope(block: CoroutineScope.() -> R): R
+
     fun cancel()
 
     fun launch(
@@ -47,6 +49,10 @@ internal class ActorScopeImpl(
 ) : ActorScope {
     override val actorJob: Job = SupervisorJob(parentJob)
     private val scope = CoroutineScope(actorJob + dispatcher)
+
+    override fun <R> inScope(block: CoroutineScope.() -> R): R {
+        return scope.block()
+    }
 
     override fun cancel() {
         actorJob.cancel()

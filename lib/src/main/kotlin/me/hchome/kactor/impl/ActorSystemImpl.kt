@@ -12,6 +12,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.onClosed
+import kotlinx.coroutines.channels.onFailure
+import kotlinx.coroutines.channels.onSuccess
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -27,6 +30,7 @@ import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemMessageListener
 import me.hchome.kactor.ActorSystemNotificationMessage
+import me.hchome.kactor.MessagePriority
 import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SupervisorStrategy
 import me.hchome.kactor.SystemMessage
@@ -85,8 +89,10 @@ internal class ActorSystemImpl(
         decision: SupervisorStrategy.Decision
     ) {
         when (decision) {
+            SupervisorStrategy.Decision.Resume -> {}
             SupervisorStrategy.Decision.Stop -> systemMailbox.send(StopActor(ref))
-            SupervisorStrategy.Decision.Restart -> systemMailbox.send(RestartActor(ref))
+            SupervisorStrategy.Decision.Recreate -> systemMailbox.send(RestartActor(ref, true))
+            SupervisorStrategy.Decision.Restart -> systemMailbox.send(RestartActor(ref, false))
         }
     }
 
@@ -140,8 +146,30 @@ internal class ActorSystemImpl(
                         continue
                     }
                     select {
-                        systemMailbox.onReceive(::handleSystemMessage)
-                        userMailbox.onReceive(::handleUserMessage)
+                        systemMailbox.onReceiveCatching { result ->
+                            result.onSuccess {
+                                handleSystemMessage(it)
+                            }.onClosed {
+                                notifySystem(
+                                    ActorRef.EMPTY,
+                                    ActorRef.EMPTY,
+                                    "ActorSystem system mailbox closed",
+                                    ActorSystemNotificationMessage.NotificationType.SYSTEM_CLOSE
+                                )
+                            }
+                        }
+                        userMailbox.onReceiveCatching { result ->
+                            result.onSuccess {
+                                handleUserMessage(it)
+                            }.onClosed {
+                                notifySystem(
+                                    ActorRef.EMPTY,
+                                    ActorRef.EMPTY,
+                                    "ActorSystem user mailbox closed",
+                                    ActorSystemNotificationMessage.NotificationType.SYSTEM_CLOSE
+                                )
+                            }
+                        }
                     }
                 }
             } catch (e: CancellationException) {
@@ -167,11 +195,11 @@ internal class ActorSystemImpl(
         }
     }
 
-    override fun send(actorRef: ActorRef, sender: ActorRef, message: Any) {
+    override fun send(actorRef: ActorRef, sender: ActorRef, message: Any, priority: MessagePriority) {
         if (!runningFlag.load()) {
             throw ActorSystemException("Actor system not running")
         }
-        val result = userMailbox.trySend(UserMessage.Tell(actorRef, sender, message))
+        val result = userMailbox.trySend(UserMessage.Tell(actorRef, sender, message, priority))
         if (result.isFailure) {
             notifySystem(
                 sender,
@@ -182,12 +210,18 @@ internal class ActorSystemImpl(
         }
     }
 
-    override fun <T : Any> ask(actorRef: ActorRef, sender: ActorRef, message: Any, timeout: Duration): Deferred<T> {
+
+    override fun <T : Any> ask(
+        actorRef: ActorRef,
+        sender: ActorRef,
+        message: Any,
+        priority: MessagePriority,
+    ): Deferred<T> {
         if (!runningFlag.load()) {
             throw ActorSystemException("Actor system not running")
         }
         val deferred = CompletableDeferred<T>()
-        val result = userMailbox.trySend(UserMessage.Ask(actorRef, sender, message, deferred))
+        val result = userMailbox.trySend(UserMessage.Ask(actorRef, sender, message, priority, deferred))
         if (result.isFailure) {
             notifySystem(
                 sender,
@@ -217,6 +251,7 @@ internal class ActorSystemImpl(
             ActorSystemNotificationMessage.NotificationType.ACTOR_MESSAGE,
             ActorSystemNotificationMessage.NotificationType.ACTOR_CREATED,
             ActorSystemNotificationMessage.NotificationType.ACTOR_RESTARTED,
+            ActorSystemNotificationMessage.NotificationType.SYSTEM_CLOSE,
             ActorSystemNotificationMessage.NotificationType.ACTOR_DESTROYED -> ActorSystemNotificationMessage.MessageLevel.INFO
 
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL -> ActorSystemNotificationMessage.MessageLevel.ERROR
@@ -233,12 +268,13 @@ internal class ActorSystemImpl(
         sender: ActorRef,
         message: Any,
         cause: Throwable
-    ) {
-        when (supervisorStrategy) {
+    ): SupervisorStrategy.Decision {
+        return when (supervisorStrategy) {
             is SupervisorStrategy.AllForOne, is SupervisorStrategy.Escalate -> { // System cannot do crazy thing just fall back to OneForOne
                 SupervisorStrategy.OneForOne.decide(ActorFailure(this, child, sender, message, cause, this))
             }
 
+            is SupervisorStrategy.Resume -> SupervisorStrategy.Decision.Resume
             else -> {
                 supervisorStrategy.onFailure(ActorFailure(this, child, sender, message, cause, this))
             }
@@ -249,7 +285,7 @@ internal class ActorSystemImpl(
         when (message) {
             is CreateActor -> actorRegistry.createActor(message)
             is StopActor -> actorRegistry.stopActor(message.ref)
-            is RestartActor -> actorRegistry.restartActor(message.ref)
+            is RestartActor -> actorRegistry.restartActor(message.ref, message.recreate)
         }
     } catch (e: Throwable) {
         notifySystem(
