@@ -4,8 +4,6 @@ package me.hchome.kactor
  * Actors can be restarted by the supervisor strategy when they crash.
  * [OneForOne] restarts the child actor by default.
  * [AllForOne] restarts all children when one of them crashes.
- * [Resume] Not restarts the child actor but send to exception handling.
- * [Stop] stops the child actor.
  * [Escalate] escalates the failure to the supervisor
  *
  */
@@ -58,20 +56,20 @@ sealed interface SupervisorStrategy {
         }
     }
 
-    object Resume : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            // Report sent, no need to do anything
-            return Decision.Resume
-        }
-    }
-
-    object Stop : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            val system = failure.system
-            system.processFailure(failure.ref, Decision.Stop)
-            return Decision.Stop
-        }
-    }
+//    object Resume : SupervisorStrategy {
+//        override suspend fun decide(failure: ActorFailure): Decision {
+//            // Report sent, no need to do anything
+//            return Decision.Resume
+//        }
+//    }
+//
+//    object Stop : SupervisorStrategy {
+//        override suspend fun decide(failure: ActorFailure): Decision {
+//            val system = failure.system
+//            system.processFailure(failure.ref, Decision.Stop)
+//            return Decision.Stop
+//        }
+//    }
 
     object Escalate : SupervisorStrategy {
         override suspend fun decide(failure: ActorFailure): Decision {

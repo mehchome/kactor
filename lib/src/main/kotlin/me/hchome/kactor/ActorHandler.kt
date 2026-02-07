@@ -51,4 +51,9 @@ interface ActorHandler {
      */
     context(context: ActorContext)
     suspend fun onIdle() {}
+
+    context(context: ActorContext)
+    suspend fun supervise(
+        child: ActorRef,
+    ): SupervisorStrategy.Decision = SupervisorStrategy.Decision.Restart
 }
