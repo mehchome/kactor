@@ -25,7 +25,7 @@ import me.hchome.kactor.ActorHandlerRegistry
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorRegistry
 import me.hchome.kactor.ActorSystem
-import me.hchome.kactor.ActorSystemException
+import me.hchome.kactor.exceptions.ActorSystemException
 import me.hchome.kactor.ActorSystemMessageListener
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.MessagePriority
@@ -247,11 +247,6 @@ internal class ActorSystemImpl(
         cause: Throwable
     ): SupervisorStrategy.Decision {
         return when (supervisorStrategy) {
-            is SupervisorStrategy.AllForOne, is SupervisorStrategy.Escalate -> { // System cannot do crazy thing just fall back to OneForOne
-                SupervisorStrategy.OneForOne.decide(ActorFailure(this, child, sender, message, cause, this))
-            }
-
-            is SupervisorStrategy.Resume -> SupervisorStrategy.Decision.Resume
             else -> {
                 supervisorStrategy.onFailure(ActorFailure(this, child, sender, message, cause, this))
             }

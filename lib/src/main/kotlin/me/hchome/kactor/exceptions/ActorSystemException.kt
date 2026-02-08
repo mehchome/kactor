@@ -1,4 +1,4 @@
-package me.hchome.kactor
+package me.hchome.kactor.exceptions
 
 /**
  * Actor system exception

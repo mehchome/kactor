@@ -26,4 +26,16 @@ sealed interface SystemMessage {
      * messages to stop an actor
      */
     data class StopActor(val ref: ActorRef) : SystemMessage
+
+
+    /**
+     * message for notifying supervisor when it crashes
+     */
+    data class ActorFailed(
+        val ref: ActorRef,
+        val name: String,
+        val reason: ActorFailedReason,
+        val errorCode: Int,
+        val errorMessage: String
+    ) : SystemMessage
 }

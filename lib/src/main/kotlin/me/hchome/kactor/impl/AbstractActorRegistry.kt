@@ -5,7 +5,7 @@ import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorRegistry
 import me.hchome.kactor.ActorSystem
-import me.hchome.kactor.ActorSystemException
+import me.hchome.kactor.exceptions.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.Supervisor

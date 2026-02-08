@@ -1,7 +1,7 @@
 package me.hchome.kactor.impl
 
 import me.hchome.kactor.ActorRef
-import me.hchome.kactor.ActorSystemException
+import me.hchome.kactor.exceptions.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.Supervisor
