@@ -136,10 +136,10 @@ abstract class AbstractActorRegistry : ActorRegistry {
     protected val CreateActor.handler: ActorHandler
         get() = actorSystem[domain].newActorHandler()
 
-    protected val ActorRef.parentJob: Job get() = if (hasParent) getRuntimeScope(parentOf()).actorJob else systemJob
+    protected val ActorRef.parentJob: Job get() = systemJob
 
     protected val ActorRef.supervisor: Supervisor
-        get() = if (parentOf().isNotEmpty()) actors[parentOf()] ?: systemSupervisor else systemSupervisor
+        get() =  systemSupervisor
 
     protected abstract fun createAttribute(old: Attributes): Attributes
 }

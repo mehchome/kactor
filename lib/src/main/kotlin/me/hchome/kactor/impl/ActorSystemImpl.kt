@@ -258,6 +258,7 @@ internal class ActorSystemImpl(
             is CreateActor -> actorRegistry.createActor(message)
             is StopActor -> actorRegistry.stopActor(message.ref)
             is RestartActor -> actorRegistry.restartActor(message.ref, message.recreate)
+            else -> {}
         }
     } catch (e: Throwable) {
         notifySystem(
