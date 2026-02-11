@@ -10,12 +10,10 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.onSuccess
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
 import me.hchome.kactor.ActorFailure
@@ -151,11 +149,11 @@ internal class ActorSystemImpl(
         runningFlag.compareAndExchange(expectedValue = false, newValue = true)
     }
 
-    override fun shutdownGracefully() = runBlocking {
+    override fun shutdownGracefully() {
         systemMailbox.close()
-        mailboxJob?.cancelAndJoin()
+        mailboxJob?.cancel()
         actorRegistry.stopAllActors()
-        systemJob.cancelAndJoin()
+        systemJob.cancel()
         systemScope.cancel()
         notifySystem(ActorRef.EMPTY, ActorRef.EMPTY, "Actor system shutdown", ActorSystemNotificationMessage.NotificationType.SYSTEM_CLOSE)
     }
