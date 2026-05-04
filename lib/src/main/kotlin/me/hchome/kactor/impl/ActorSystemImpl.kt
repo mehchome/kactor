@@ -232,7 +232,7 @@ internal class ActorSystemImpl(
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL -> ActorSystemNotificationMessage.MessageLevel.ERROR
             ActorSystemNotificationMessage.NotificationType.SYSTEM_ERROR -> ActorSystemNotificationMessage.MessageLevel.ERROR
         }
-        val notification = ActorSystemNotificationMessage(notificationType, sender, receiver, level, message, throwable)
+        val notification = ActorSystemNotificationMessage(notificationType, sender, receiver, level, message, null,throwable)
         listeners.forEach { listener ->
             listener.onMessage(notification)
         }
