@@ -85,7 +85,7 @@ interface ActorSystem : ActorHandlerRegistry {
         receiver: ActorRef,
         message: String,
         notificationType: ActorSystemNotificationMessage.NotificationType,
-        throwable: Throwable? = null
+        throwable: Throwable? = null, data: Any? = null
     )
 
     suspend fun processFailure(ref: ActorRef, decision: SupervisorStrategy.Decision)

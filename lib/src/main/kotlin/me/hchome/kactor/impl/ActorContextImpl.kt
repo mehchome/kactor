@@ -15,6 +15,7 @@ import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
+import me.hchome.kactor.BehaviorBlock
 import me.hchome.kactor.MessagePriority
 import kotlin.reflect.KClass
 import kotlin.time.Duration
@@ -29,6 +30,22 @@ internal data class ActorContextImpl(
     private val runtimeScope: ActorScope,
     private val attributes: Attributes
 ) : ActorContext, Attributes by attributes {
+
+    // Stack of active behaviors; last element is the current one.
+    // Only accessed from the actor's own mailbox coroutine — no synchronization needed.
+    private val behaviorStack = ArrayDeque<BehaviorBlock>()
+
+    /** The behavior currently on top of the stack, or null when using the default onMessage. */
+    internal val currentBehavior: BehaviorBlock?
+        get() = behaviorStack.lastOrNull()
+
+    override fun become(behavior: BehaviorBlock) {
+        behaviorStack.addLast(behavior)
+    }
+
+    override fun unbecome() {
+        if (behaviorStack.isNotEmpty()) behaviorStack.removeLast()
+    }
 
     override val ref: ActorRef
         get() = self.ref

@@ -18,6 +18,7 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
 import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
+import me.hchome.kactor.isEmpty
 import me.hchome.kactor.ActorHandlerFactory
 import me.hchome.kactor.ActorHandlerRegistry
 import me.hchome.kactor.ActorRef
@@ -88,6 +89,7 @@ internal class ActorSystemImpl(
             SupervisorStrategy.Decision.Stop -> systemMailbox.send(StopActor(ref))
             SupervisorStrategy.Decision.Recreate -> systemMailbox.send(RestartActor(ref, true))
             SupervisorStrategy.Decision.Restart -> systemMailbox.send(RestartActor(ref, false))
+            SupervisorStrategy.Decision.Escalate -> systemMailbox.send(RestartActor(ref, false))
         }
     }
 
@@ -214,7 +216,8 @@ internal class ActorSystemImpl(
         receiver: ActorRef,
         message: String,
         notificationType: ActorSystemNotificationMessage.NotificationType,
-        throwable: Throwable?
+        throwable: Throwable?,
+        data: Any?
     ) {
         val level = when (notificationType) {
             ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED,
@@ -232,28 +235,26 @@ internal class ActorSystemImpl(
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL -> ActorSystemNotificationMessage.MessageLevel.ERROR
             ActorSystemNotificationMessage.NotificationType.SYSTEM_ERROR -> ActorSystemNotificationMessage.MessageLevel.ERROR
         }
-        val notification = ActorSystemNotificationMessage(notificationType, sender, receiver, level, message, throwable)
+        val notification = ActorSystemNotificationMessage(notificationType, sender, receiver, level, message, data,throwable)
         listeners.forEach { listener ->
             listener.onMessage(notification)
         }
     }
 
-    override suspend fun supervise(
-        child: ActorRef,
-        sender: ActorRef,
-        message: Any,
-        cause: Throwable
-    ): SupervisorStrategy.Decision {
-        return when (supervisorStrategy) {
-            is SupervisorStrategy.AllForOne, is SupervisorStrategy.Escalate -> { // System cannot do crazy thing just fall back to OneForOne
-                SupervisorStrategy.OneForOne.decide(ActorFailure(this, child, sender, message, cause, this))
-            }
-
-            is SupervisorStrategy.Resume -> SupervisorStrategy.Decision.Resume
-            else -> {
-                supervisorStrategy.onFailure(ActorFailure(this, child, sender, message, cause, this))
+    override suspend fun supervise(failure: ActorFailure): SupervisorStrategy.Decision {
+        notifySystem(
+            failure.sender, failure.ref, "Actor[${failure.ref}] failure",
+            ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, failure.cause
+        )
+        // System is the root supervisor — always restarts; Escalate has nowhere to go.
+        val decision = SupervisorStrategy.Decision.Restart
+        when (supervisorStrategy) {
+            SupervisorStrategy.OneForOne -> processFailure(failure.ref, decision)
+            SupervisorStrategy.AllForOne -> all.filter { it.parentOf().isEmpty() }.forEach {
+                processFailure(it, decision)
             }
         }
+        return decision
     }
 
     private fun handleSystemMessage(message: SystemMessage): Unit = try {

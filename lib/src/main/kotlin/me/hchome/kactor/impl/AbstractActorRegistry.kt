@@ -83,9 +83,8 @@ abstract class AbstractActorRegistry : ActorRegistry {
     protected fun rebuildActorScope(ref: ActorRef) {
         if (ref.isEmpty()) return
         val holder = actors[ref]?.domain?.let { actorSystem[it] } ?: return
-        val parentJob = ref.parentJob
-        val newRuntimeScope = ActorScopeImpl(parentJob, holder.dispatcher)
-        runtimeScopes[ref] = newRuntimeScope
+        runtimeScopes[ref]?.cancel()
+        runtimeScopes[ref] = ActorScopeImpl(systemJob, holder.dispatcher)
         childReferences(ref).forEach { rebuildActorScope(it) }
     }
 
@@ -129,14 +128,14 @@ abstract class AbstractActorRegistry : ActorRegistry {
             sender,
             ref,
             formattedMessage,
-            ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
+            ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED,
+            null,
+            message
         )
     }
 
     protected val CreateActor.handler: ActorHandler
         get() = actorSystem[domain].newActorHandler()
-
-    protected val ActorRef.parentJob: Job get() = if (hasParent) getRuntimeScope(parentOf()).actorJob else systemJob
 
     protected val ActorRef.supervisor: Supervisor
         get() = if (parentOf().isNotEmpty()) actors[parentOf()] ?: systemSupervisor else systemSupervisor
