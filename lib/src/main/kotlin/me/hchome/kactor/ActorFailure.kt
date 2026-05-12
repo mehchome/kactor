@@ -1,13 +1,13 @@
 package me.hchome.kactor
 
 /**
- * Actor failure message
+ * Describes a child actor failure, passed from the failing actor to its supervisor
+ * via [ActorHandler.onException] and then to [ActorHandler.onSupervise].
  */
 data class ActorFailure(
-    val system: ActorSystem,
     val ref: ActorRef,
     val sender: ActorRef,
     val message: Any,
     val cause: Throwable,
-    val supervisor: Supervisor
+    val reason: String = cause.message ?: "Unknown failure"
 )
