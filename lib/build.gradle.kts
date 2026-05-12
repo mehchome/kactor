@@ -111,7 +111,7 @@ publishing {
 
     repositories {
         maven {
-            val releasePath = getExtraString("releasePath") ?: error("Release path is not configured.")
+            val releasePath = getExtraString("releasePath") ?: "snapshots"
             name = "S3"
             url = uri(getExtraString("aws.s3BucketUrl")?.let { "$it/$releasePath" }
                 ?: error("S3 bucket URL is not configured."))

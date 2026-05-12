@@ -26,7 +26,8 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
                 target,
                 "Message can't be delivered to $target",
                 ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED,
-                ActorSystemException("Actor[$target] not found")
+                ActorSystemException("Actor[$target] not found"),
+                message
             )
         }
     }
@@ -41,7 +42,8 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
                 target,
                 "Message can't be delivered to $target",
                 ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED,
-                ActorSystemException("Actor[$target] not found")
+                ActorSystemException("Actor[$target] not found"),
+                message
             )
             callback.completeExceptionally(ActorSystemException("Actor[$target] not found"))
         }
@@ -56,10 +58,8 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
             callback.completeExceptionally(ActorSystemException("Actor[$ref] already exists"))
             return
         }
-        val parentJob = ref.parentJob
         val supervisor: Supervisor = ref.supervisor
-        // new actor's environment
-        val newRuntimeScope = ActorScopeImpl(parentJob, dispatcher)
+        val newRuntimeScope = ActorScopeImpl(systemJob, dispatcher)
         val newMailbox = createChannel(message, ref)
         val newHandler = message.handler
         val newAttributes = AttributesImpl()
@@ -90,17 +90,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
     override fun stopActor(ref: ActorRef) {
         if (ref.isEmpty()) return
         closeChannels(ref)
-        runtimeScopes[ref]?.cancel()
-        childReferences(ref).forEach {
-            actorChannels[it]?.close()
-            runtimeScopes[it]?.cancel()
-            actorAttributes.remove(it)
-            actors.remove(it)
-        }
-        actorChannels.remove(ref)
-        actorAttributes.remove(ref)
-        runtimeScopes.remove(ref)
-        actors.remove(ref)
+        cancelAndCleanup(ref)
         actorSystem.notifySystem(
             ActorRef.EMPTY,
             ref,
@@ -109,11 +99,22 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         )
     }
 
+    private fun cancelAndCleanup(ref: ActorRef) {
+        childReferences(ref).forEach { cancelAndCleanup(it) }
+        runtimeScopes[ref]?.cancel()
+        actorChannels.remove(ref)
+        actorAttributes.remove(ref)
+        runtimeScopes.remove(ref)
+        actors.remove(ref)
+    }
+
     override fun restartActor(ref: ActorRef, recreate: Boolean) {
         if (ref.isEmpty()) return
         actors[ref] ?: return
         val runtimeScope = runtimeScopes[ref] ?: return
-        closeChannels(ref)
+        if (recreate) {
+            closeChannels(ref)
+        }
         runtimeScope.cancel()
         // rebuild actor environment
         if (recreate) {

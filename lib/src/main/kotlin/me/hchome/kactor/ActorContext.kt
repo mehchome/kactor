@@ -20,6 +20,18 @@ import kotlin.uuid.Uuid
 
 
 /**
+ * A behavior that temporarily replaces [ActorHandler.onMessage] for tell (`send`) messages.
+ *
+ * Push with [ActorContext.become]; pop with [ActorContext.unbecome].
+ * The behavior receives the current [ActorContext] so it can use all context operations
+ * (send, ask, stop, schedule…). `this` inside the lambda is the actor's [ActorHandler]
+ * instance, giving access to any handler-level state.
+ *
+ * Takes effect from the **next** message after [ActorContext.become] is called.
+ */
+typealias BehaviorBlock = suspend ActorHandler.(ctx: ActorContext, message: Any, sender: ActorRef) -> Unit
+
+/**
  * Actor context is a container for actor information and methods. Use the context to do the operations
  * on the actor. Implements [CoroutineScope] to allow the actor to run coroutines inside the actor context.
  * So when the actor is stopped, all coroutines inside the context will be cancelled.
@@ -206,6 +218,25 @@ interface ActorContext : Attributes {
      * create a run task
      */
     fun task(initDelay: Duration = Duration.ZERO, block: suspend ActorHandler.(String) -> Unit): Job
+
+    /**
+     * Push [behavior] onto the behavior stack, replacing [ActorHandler.onMessage] for all
+     * subsequent tell (`send`) messages until [unbecome] is called.
+     *
+     * Multiple calls stack: each [become] adds one layer; each [unbecome] peels one off.
+     * When the stack is empty the actor reverts to its default [ActorHandler.onMessage].
+     *
+     * The behavior takes effect starting from the **next** message.
+     *
+     * @param behavior the new message-handling lambda; `this` inside it is the [ActorHandler]
+     */
+    fun become(behavior: BehaviorBlock)
+
+    /**
+     * Pop the current behavior from the stack, restoring the previous one.
+     * If the stack is already empty, this is a no-op.
+     */
+    fun unbecome()
 }
 
 suspend inline fun <reified T : ActorHandler> ActorContext.newChild(id: String? = null): ActorRef {

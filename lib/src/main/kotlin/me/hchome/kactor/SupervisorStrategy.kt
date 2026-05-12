@@ -1,85 +1,37 @@
 package me.hchome.kactor
 
 /**
- * Actors can be restarted by the supervisor strategy when they crash.
- * [OneForOne] restarts the child actor by default.
- * [AllForOne] restarts all children when one of them crashes.
- * [Resume] Not restarts the child actor but send to exception handling.
- * [Stop] stops the child actor.
- * [Escalate] escalates the failure to the supervisor
+ * Supervisor strategy controls the *scope* of how a supervisor responds to child failures.
+ * The *decision* (what action to take) is determined dynamically by the supervisor actor's
+ * [ActorHandler.onSupervise] method.
  *
+ *  - [OneForOne] applies the decision only to the failed child.
+ *  - [AllForOne] applies the decision to every child of the same parent.
+ *
+ * Possible decisions returned by [ActorHandler.onSupervise]:
+ *  - [Decision.Resume]   – ignore the failure, continue processing
+ *  - [Decision.Restart]  – restart the child, preserving unprocessed mailbox messages
+ *  - [Decision.Recreate] – restart the child with a fresh mailbox (messages discarded)
+ *  - [Decision.Stop]     – stop the child permanently
+ *  - [Decision.Escalate] – pass the failure up to the parent's supervisor
  */
 sealed interface SupervisorStrategy {
 
-    suspend fun onFailure(failure: ActorFailure): Decision {
-        val system = failure.system
-        system.notifySystem(
-            failure.sender,
-            failure.ref,
-            "Actor failure",
-            ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL,
-            failure.cause
-        )
-        return decide(failure)
-    }
+    /** Apply the decision to the failed child only. */
+    data object OneForOne : SupervisorStrategy
 
-    suspend fun decide(failure: ActorFailure): Decision
-
-    object OneForOne : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            val system = failure.system
-            system.processFailure(failure.ref, Decision.Recreate)
-            return Decision.Recreate
-        }
-    }
-
-    object OneForOneRetained : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            val system = failure.system
-            system.processFailure(failure.ref, Decision.Restart)
-            return Decision.Restart
-        }
-    }
-
-    object AllForOne : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            val system = failure.system
-            val parentRef = failure.ref.parentOf()
-            return if (parentRef.isNotEmpty()) {
-                val allChildReferences = system.childReferences(parentRef)
-                for (childRef in allChildReferences) {
-                    // send restart messages to all children
-                    system.processFailure(childRef, Decision.Restart)
-                }
-                Decision.Restart
-            } else { // the root actor falls back to OneForOne
-                OneForOne.decide(failure)
-            }
-        }
-    }
-
-    object Resume : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            // Report sent, no need to do anything
-            return Decision.Resume
-        }
-    }
-
-    object Stop : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            val system = failure.system
-            system.processFailure(failure.ref, Decision.Stop)
-            return Decision.Stop
-        }
-    }
-
-    object Escalate : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            return failure.supervisor.supervise(failure.ref, failure.sender, failure.message, failure.cause)
-        }
-    }
+    /** Apply the decision to all children of the same parent. */
+    data object AllForOne : SupervisorStrategy
 
     enum class Decision {
-        Recreate, Restart, Stop, Resume
+        Resume,
+        Restart,   // restart, keep mailbox
+        Recreate,  // restart, discard mailbox
+        Stop,
+        Escalate,
+    }
+
+    companion object {
+        val default: SupervisorStrategy = OneForOne
     }
 }
