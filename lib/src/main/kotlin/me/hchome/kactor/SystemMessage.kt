@@ -14,7 +14,8 @@ sealed interface SystemMessage {
         val id: String,
         val parent: ActorRef,
         val domain: String,
-        val callback: CompletableDeferred<ActorRef>
+        val callback: CompletableDeferred<ActorRef>,
+        val props: Props = Props.EMPTY
     ) : SystemMessage
 
     /**

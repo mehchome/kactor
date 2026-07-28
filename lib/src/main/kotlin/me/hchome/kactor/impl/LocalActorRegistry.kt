@@ -4,6 +4,7 @@ import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
+import me.hchome.kactor.Props
 import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SystemMessage
 import me.hchome.kactor.UserMessage
@@ -15,6 +16,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
     override val runtimeScopes = ConcurrentHashMap<ActorRef, ActorScope>()
     override val actorChannels = ConcurrentHashMap<ActorRef, MailBox>()
     override val actorAttributes = ConcurrentHashMap<ActorRef, Attributes>()
+    override val actorProps = ConcurrentHashMap<ActorRef, Props>()
 
     override suspend fun tell(tell: UserMessage.Tell) {
         val (target, sender, message, priority) = tell
@@ -65,13 +67,14 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         val newAttributes = AttributesImpl()
         val newActor = Actor(
             ref, message.domain, actorSystem, config.supervisorStrategy,
-            supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes, config.idle
+            supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes, config.idle, message.props
         )
         // store all actor information
         actors[ref] = newActor
         runtimeScopes[ref] = newRuntimeScope
         actorChannels[ref] = newMailbox
         actorAttributes[ref] = newAttributes
+        actorProps[ref] = message.props
         // start an actor
         try {
             newActor.startActor()
@@ -104,6 +107,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         runtimeScopes[ref]?.cancel()
         actorChannels.remove(ref)
         actorAttributes.remove(ref)
+        actorProps.remove(ref)
         runtimeScopes.remove(ref)
         actors.remove(ref)
     }

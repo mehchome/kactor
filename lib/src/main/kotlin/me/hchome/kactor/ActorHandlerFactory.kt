@@ -16,30 +16,33 @@ interface ActorHandlerFactory {
      * @param kClass actor handler class
      * @return actor handler
      */
-    fun <T> getBean(kClass: KClass<T>): T where T : ActorHandler = getBean(kClass, *emptyArray<Any>())
+    fun <T> getBean(kClass: KClass<T>): T where T : ActorHandler = getBean(kClass, Props.EMPTY)
 
     /**
-     * Get an actor handler by class and arguments
+     * Get an actor handler by class, matching [props] to constructor parameters by name
      *
      * @param kClass actor handler class
-     * @param args arguments
+     * @param props named startup parameters
      * @return actor handler
      */
-    fun <T> getBean(kClass: KClass<T>, vararg args: Any): T where T : ActorHandler
+    fun <T> getBean(kClass: KClass<T>, props: Props): T where T : ActorHandler
 }
 
 inline fun <reified T> ActorHandlerFactory.getBean(): T where T : ActorHandler = getBean(T::class)
 
 object DefaultActorHandlerFactory : ActorHandlerFactory {
-    override fun <T : ActorHandler> getBean(kClass: KClass<T>, vararg args: Any): T {
-        if (args.isEmpty()) {
+    override fun <T : ActorHandler> getBean(kClass: KClass<T>, props: Props): T {
+        if (props.values.isEmpty()) {
             val o = kClass.objectInstance
             if (o != null) return o
             return kClass.createInstance()
         }
-        val constructor = kClass.constructors.firstOrNull {
-            it.parameters.size == args.size
+        val constructor = kClass.constructors.firstOrNull { constructor ->
+            constructor.parameters.all { it.isOptional || it.name in props.values }
         } ?: error("No matching constructor for ${kClass.simpleName}")
-        return constructor.call(*args)
+        val arguments = constructor.parameters
+            .filter { it.name in props.values }
+            .associateWith { props.values.getValue(it.name!!) }
+        return constructor.callBy(arguments)
     }
 }

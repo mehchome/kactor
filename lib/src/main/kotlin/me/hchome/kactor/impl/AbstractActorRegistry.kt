@@ -8,6 +8,7 @@ import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
+import me.hchome.kactor.Props
 import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SystemMessage.CreateActor
 import me.hchome.kactor.isEmpty
@@ -21,6 +22,7 @@ abstract class AbstractActorRegistry : ActorRegistry {
     protected abstract val runtimeScopes: MutableMap<ActorRef, ActorScope>
     protected abstract val actorChannels: MutableMap<ActorRef, MailBox>
     protected abstract val actorAttributes: MutableMap<ActorRef, Attributes>
+    protected abstract val actorProps: MutableMap<ActorRef, Props>
 
     protected lateinit var actorSystem: ActorSystem
         private set
@@ -103,7 +105,8 @@ abstract class AbstractActorRegistry : ActorRegistry {
         val configHolder = actorSystem[oldActor.domain]
         val config = configHolder.config
 
-        val newHandler = configHolder.newActorHandler()
+        val props = actorProps[ref] ?: Props.EMPTY
+        val newHandler = configHolder.newActorHandler(props)
         val newActor = Actor(
             ref,
             oldActor.domain,
@@ -114,7 +117,8 @@ abstract class AbstractActorRegistry : ActorRegistry {
             targetScope,
             newHandler,
             actorAttributes[ref] ?: createAttribute(AttributesImpl()),
-            config.idle
+            config.idle,
+            props
         )
         actors[ref] = newActor
         childReferences(ref).forEach { rebuildActors(it) }
@@ -135,7 +139,7 @@ abstract class AbstractActorRegistry : ActorRegistry {
     }
 
     protected val CreateActor.handler: ActorHandler
-        get() = actorSystem[domain].newActorHandler()
+        get() = actorSystem[domain].newActorHandler(props)
 
     protected val ActorRef.supervisor: Supervisor
         get() = if (parentOf().isNotEmpty()) actors[parentOf()] ?: systemSupervisor else systemSupervisor
