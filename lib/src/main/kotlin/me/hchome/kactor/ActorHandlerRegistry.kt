@@ -63,5 +63,5 @@ data class ActorHandlerConfigHolder(
     /**
      * create a new actor handler instance
      */
-    fun newActorHandler() = factory.getBean(kClass)
+    fun newActorHandler(props: Props = Props.EMPTY) = factory.getBean(kClass, props)
 }

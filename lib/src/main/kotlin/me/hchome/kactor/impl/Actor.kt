@@ -21,6 +21,7 @@ import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.MessagePriority
+import me.hchome.kactor.Props
 import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SupervisorStrategy
 import me.hchome.kactor.TaskInfo
@@ -64,6 +65,7 @@ private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, Co
  * @param handler business-logic delegate; receives all lifecycle and message callbacks
  * @param attributes mutable key-value store attached to this actor instance
  * @param idle after this duration without a message [ActorHandler.onIdle] is invoked
+ * @param props startup parameters this actor was spawned (or recreated) with
  *
  * @see ActorSystem
  * @see ActorHandler
@@ -80,9 +82,10 @@ class Actor internal constructor(
     private val handler: ActorHandler,
     attributes: Attributes,
     private val idle: Duration,
+    props: Props = Props.EMPTY,
 ) : Supervisor {
 
-    private val context = ActorContextImpl(this, actorSystem, runtimeScope, attributes)
+    private val context = ActorContextImpl(this, actorSystem, runtimeScope, attributes, props)
 
     private var mailBoxJob: Job? = null
 

@@ -28,6 +28,7 @@ import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemMessageListener
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.MessagePriority
+import me.hchome.kactor.Props
 import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SupervisorStrategy
 import me.hchome.kactor.SystemMessage
@@ -97,22 +98,24 @@ internal class ActorSystemImpl(
     override suspend fun <T : ActorHandler> actorOfSuspend(
         id: String?,
         parent: ActorRef,
-        kClass: KClass<T>
+        kClass: KClass<T>,
+        props: Props
     ): ActorRef {
         val domain = this.findName(kClass) ?: throw ActorSystemException("Actor handler type not found: $kClass")
-        return actorOfSuspend(id ?: Uuid.random().toString(), parent, domain)
+        return actorOfSuspend(id ?: Uuid.random().toString(), parent, domain, props)
     }
 
     private suspend fun actorOfSuspend(
         id: String,
         parent: ActorRef,
         domain: String,
+        props: Props,
     ): ActorRef {
         if (!runningFlag.load()) {
             throw ActorSystemException("Actor system not running")
         }
         val deferred = CompletableDeferred<ActorRef>()
-        val result = systemMailbox.trySend(CreateActor(id, parent, domain, deferred))
+        val result = systemMailbox.trySend(CreateActor(id, parent, domain, deferred, props))
         if (result.isFailure) {
             deferred.cancel(CancellationException(result.exceptionOrNull()?.message ?: "Actor creation failed"))
         }

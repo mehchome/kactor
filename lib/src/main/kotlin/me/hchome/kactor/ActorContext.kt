@@ -67,6 +67,13 @@ interface ActorContext : Attributes {
     suspend fun <T> state(flow: Flow<T>): StateFlow<T>
 
     /**
+     * Startup parameters this actor was spawned with (see `actorOf`/`newActor`/`newChild`).
+     * Reused as-is when the actor is recreated, so this stays stable across restarts.
+     * @see Props
+     */
+    val props: Props
+
+    /**
      * Actor reference
      * @see ActorRef
      */
@@ -188,20 +195,24 @@ interface ActorContext : Attributes {
 
     /**
      * Create a child actor
+     * @param props startup parameters passed to the actor handler's constructor
      * @see ActorRef
      */
     suspend fun <T> newChild(
         id: String? = null,
         kClass: KClass<T>,
+        props: Props = Props.EMPTY,
     ): ActorRef where T : ActorHandler
 
     /**
      * Create a new actor
+     * @param props startup parameters passed to the actor handler's constructor
      * @see ActorRef
      */
     suspend fun <T> newActor(
         id: String? = null,
         kClass: KClass<T>,
+        props: Props = Props.EMPTY,
     ): ActorRef where T : ActorHandler
 
 
@@ -239,12 +250,12 @@ interface ActorContext : Attributes {
     fun unbecome()
 }
 
-suspend inline fun <reified T : ActorHandler> ActorContext.newChild(id: String? = null): ActorRef {
-    return newChild(id, T::class)
+suspend inline fun <reified T : ActorHandler> ActorContext.newChild(id: String? = null, props: Props = Props.EMPTY): ActorRef {
+    return newChild(id, T::class, props)
 }
 
-suspend inline fun <reified T : ActorHandler> ActorContext.newActor(id: String? = null): ActorRef {
-    return newActor(id, T::class)
+suspend inline fun <reified T : ActorHandler> ActorContext.newActor(id: String? = null, props: Props = Props.EMPTY): ActorRef {
+    return newActor(id, T::class, props)
 }
 
 
