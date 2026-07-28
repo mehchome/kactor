@@ -17,12 +17,13 @@ class ActorSystemTest {
 
     // ── Test handlers ──────────────────────────────────────────────────────
 
-    // Completes any CompletableDeferred<String> it receives as a message
-    class EchoActor : ActorHandler {
+    // Completes any CompletableDeferred<String> it receives with [prefix] (default "ok"),
+    // so tests can verify that Props supplied to actorOf/newActor reach the constructor.
+    class EchoActor(private val prefix: String = "ok") : ActorHandler {
         context(context: ActorContext)
         @Suppress("UNCHECKED_CAST")
         override suspend fun onMessage(message: Any, sender: ActorRef) {
-            (message as? CompletableDeferred<String>)?.complete("ok")
+            (message as? CompletableDeferred<String>)?.complete(prefix)
         }
     }
 
@@ -42,6 +43,19 @@ class ActorSystemTest {
             when (message) {
                 "fail" -> throw RuntimeException("intentional failure")
                 is CompletableDeferred<*> -> (message as CompletableDeferred<Unit>).complete(Unit)
+            }
+        }
+    }
+
+    // Throws on "fail"; otherwise completes a CompletableDeferred<String> with [prefix]
+    // (default "ok"), letting tests verify Props survive an actor restart/recreate.
+    class RestartPropsActor(private val prefix: String = "ok") : ActorHandler {
+        context(context: ActorContext)
+        @Suppress("UNCHECKED_CAST")
+        override suspend fun onMessage(message: Any, sender: ActorRef) {
+            when (message) {
+                "fail" -> throw RuntimeException("intentional failure")
+                is CompletableDeferred<*> -> (message as CompletableDeferred<String>).complete(prefix)
             }
         }
     }
@@ -73,6 +87,7 @@ class ActorSystemTest {
         system.register<EchoActor>(EchoActor::class.simpleName!!)
         system.register<PingActor>(PingActor::class.simpleName!!)
         system.register<FailActor>(FailActor::class.simpleName!!)
+        system.register<RestartPropsActor>(RestartPropsActor::class.simpleName!!)
         system.register<IdleActor>(IdleActor::class.simpleName!!, config = ActorConfig(idle = 300.milliseconds))
         system.start()
     }
@@ -143,6 +158,24 @@ class ActorSystemTest {
     }
 
     @Test
+    fun `actor restart preserves the original Props`() = runBlocking {
+        val restarted = CompletableDeferred<Unit>()
+        system += ActorSystemMessageListener { msg ->
+            if (msg.type == ActorSystemNotificationMessage.NotificationType.ACTOR_RESTARTED) {
+                restarted.complete(Unit)
+            }
+        }
+
+        val ref = system.actorOf<RestartPropsActor>(props = Props.of("prefix" to "hi"))
+        system.send(ref, "fail")
+        withTimeout(3.seconds) { restarted.await() }
+
+        val received = CompletableDeferred<String>()
+        system.send(ref, received)
+        assertEquals("hi", withTimeout(2.seconds) { received.await() })
+    }
+
+    @Test
     fun `idle timeout triggers onIdle`() = runBlocking {
         val ref = system.actorOf<IdleActor>()
         val idled = CompletableDeferred<Unit>()
@@ -176,6 +209,14 @@ class ActorSystemTest {
         assertTrue(grandchild in childChildren)
 
         system.destroyActor(parent)
+    }
+
+    @Test
+    fun `actorOf passes Props to the handler constructor by name`() = runBlocking {
+        val ref = system.actorOf<EchoActor>(props = Props.of("prefix" to "hi"))
+        val received = CompletableDeferred<String>()
+        system.send(ref, received)
+        assertEquals("hi", withTimeout(2.seconds) { received.await() })
     }
 
     @Test

@@ -17,6 +17,7 @@ import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.BehaviorBlock
 import me.hchome.kactor.MessagePriority
+import me.hchome.kactor.Props
 import kotlin.reflect.KClass
 import kotlin.time.Duration
 
@@ -28,7 +29,8 @@ internal data class ActorContextImpl(
     private val self: Actor,
     private val system: ActorSystem,
     private val runtimeScope: ActorScope,
-    private val attributes: Attributes
+    private val attributes: Attributes,
+    override val props: Props = Props.EMPTY
 ) : ActorContext, Attributes by attributes {
 
     // Stack of active behaviors; last element is the current one.
@@ -103,15 +105,17 @@ internal data class ActorContextImpl(
     override suspend fun <T : ActorHandler> newChild(
         id: String?,
         kClass: KClass<T>,
+        props: Props,
     ): ActorRef {
-        return system.actorOfSuspend(id, self.ref, kClass)
+        return system.actorOfSuspend(id, self.ref, kClass, props)
     }
 
     override suspend fun <T : ActorHandler> newActor(
         id: String?,
-        kClass: KClass<T>
+        kClass: KClass<T>,
+        props: Props,
     ): ActorRef {
-        return system.actorOfSuspend(id, ActorRef.EMPTY, kClass)
+        return system.actorOfSuspend(id, ActorRef.EMPTY, kClass, props)
     }
 
     override fun schedule(

@@ -19,26 +19,30 @@ interface ActorSystem : ActorHandlerRegistry {
      * @param id actor id
      * @param parent parent actor reference
      * @param kClass actor handler class
+     * @param props startup parameters passed to the actor handler's constructor
      * @return actor reference
      */
     fun <T> actorOf(
         id: String? = null,
         parent: ActorRef = ActorRef.EMPTY,
-        kClass: KClass<T>
+        kClass: KClass<T>,
+        props: Props = Props.EMPTY
     ): ActorRef where T : ActorHandler = runBlocking {
-        actorOfSuspend(id, parent, kClass)
+        actorOfSuspend(id, parent, kClass, props)
     }
 
     /**
      * create an actor
      * @param id actor id
      * @param parent parent actor reference
+     * @param props startup parameters passed to the actor handler's constructor
      * @return actor reference
      */
     suspend fun <T> actorOfSuspend(
         id: String? = null,
         parent: ActorRef = ActorRef.EMPTY,
-        kClass: KClass<T>
+        kClass: KClass<T>,
+        props: Props = Props.EMPTY
     ): ActorRef where T : ActorHandler
 
     /**
@@ -143,12 +147,14 @@ interface ActorSystem : ActorHandlerRegistry {
 
 suspend inline fun <reified T> ActorSystem.actorOfSuspend(
     id: String? = null,
-    parent: ActorRef = ActorRef.EMPTY
+    parent: ActorRef = ActorRef.EMPTY,
+    props: Props = Props.EMPTY
 ): ActorRef where T : ActorHandler =
-    actorOfSuspend(id, parent, T::class)
+    actorOfSuspend(id, parent, T::class, props)
 
 inline fun <reified T> ActorSystem.actorOf(
     id: String? = null,
-    parent: ActorRef = ActorRef.EMPTY
+    parent: ActorRef = ActorRef.EMPTY,
+    props: Props = Props.EMPTY
 ): ActorRef where T : ActorHandler =
-    actorOf(id, parent, T::class)
+    actorOf(id, parent, T::class, props)
