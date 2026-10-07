@@ -2,8 +2,6 @@ package me.hchome.kactor
 
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.contract
-import kotlin.io.path.Path
-import kotlin.io.path.name
 import kotlin.reflect.KClass
 
 /**
@@ -16,26 +14,32 @@ data class ActorRef(
      */
     val actorId: String,
 ) {
-    private val path = Path(actorId)
+    // Path segments are derived with plain string ops; java.nio Path allocated a UnixPath (+ byte[])
+    // on every construction and every `parent` call, which dominated allocation on hot message paths.
+    private val separatorIndex = actorId.lastIndexOf(SEPARATOR)
 
-    val name: String
-        get() = path.name
+    /** parent actor id, or null for a root actor */
+    private val parentId: String? = if (separatorIndex > 0) actorId.substring(0, separatorIndex) else null
+
+    val name: String = if (separatorIndex >= 0) actorId.substring(separatorIndex + 1) else actorId
 
     val hasParent: Boolean
-        get() = path.parent != null
+        get() = parentId != null
 
     val lastParentId: String
-        get() = path.parent?.name ?: ""
+        get() = parentId?.substringAfterLast(SEPARATOR) ?: ""
 
-    fun childOf(id: String) = of(path.resolve(id).toString())
+    fun childOf(id: String) = if (actorId.isEmpty()) of(id) else of("$actorId$SEPARATOR$id")
 
-    fun parentOf() = path.parent?.let { of(it.toString()) } ?: EMPTY
+    fun parentOf() = parentId?.let(::of) ?: EMPTY
 
-    fun isChildOf(ref: ActorRef) = this.isNotEmpty() && ref.isNotEmpty() && ref.path == path.parent
+    fun isChildOf(ref: ActorRef) = this.isNotEmpty() && ref.isNotEmpty() && ref.actorId == parentId
 
-    fun isParentOf(ref: ActorRef) = this.isNotEmpty() && ref.path.parent == path
+    fun isParentOf(ref: ActorRef) = this.isNotEmpty() && ref.parentId == actorId
 
     companion object {
+        private const val SEPARATOR = '/'
+
         @JvmStatic
         val EMPTY = ActorRef("")
 
