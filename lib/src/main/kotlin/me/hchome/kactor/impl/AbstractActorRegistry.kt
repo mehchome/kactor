@@ -142,7 +142,7 @@ abstract class AbstractActorRegistry : ActorRegistry {
         get() = actorSystem[domain].newActorHandler(props)
 
     protected val ActorRef.supervisor: Supervisor
-        get() = if (parentOf().isNotEmpty()) actors[parentOf()] ?: systemSupervisor else systemSupervisor
+        get() = if (hasParent) actors[parentOf()] ?: systemSupervisor else systemSupervisor
 
     protected abstract fun createAttribute(old: Attributes): Attributes
 }
