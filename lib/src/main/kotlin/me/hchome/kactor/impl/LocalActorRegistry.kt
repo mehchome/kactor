@@ -70,7 +70,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
             supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes, config.idle, message.props
         )
         // store all actor information
-        actors[ref] = newActor
+        registerActor(ref, newActor)
         runtimeScopes[ref] = newRuntimeScope
         actorChannels[ref] = newMailbox
         actorAttributes[ref] = newAttributes
@@ -109,7 +109,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         actorAttributes.remove(ref)
         actorProps.remove(ref)
         runtimeScopes.remove(ref)
-        actors.remove(ref)
+        unregisterActor(ref)
     }
 
     override fun restartActor(ref: ActorRef, recreate: Boolean) {
