@@ -2,6 +2,7 @@
 package me.hchome.kactor.impl
 
 import kotlinx.coroutines.Job
+import me.hchome.kactor.ActorConfig
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorRegistry
@@ -132,23 +133,47 @@ abstract class AbstractActorRegistry : ActorRegistry {
 
         val props = actorProps[ref] ?: Props.EMPTY
         val newHandler = configHolder.newActorHandler(props)
-        val newActor = Actor(
-            ref,
-            oldActor.domain,
-            actorSystem,
-            config.supervisorStrategy,
-            ref.supervisor,
-            targetChannel,
-            targetScope,
-            newHandler,
-            actorAttributes[ref] ?: createAttribute(AttributesImpl()),
-            config.idle,
-            props,
-            supervisionTimeout = config.supervisionTimeout,
+        val newActor = buildActor(
+            ref = ref,
+            domain = oldActor.domain,
+            config = config,
+            mailbox = targetChannel,
+            runtimeScope = targetScope,
+            handler = newHandler,
+            attributes = actorAttributes[ref] ?: createAttribute(AttributesImpl()),
+            props = props,
         )
         actors[ref] = newActor
         childReferences(ref).forEach { rebuildActors(it) }
     }
+
+    /**
+     * Builds an [Actor] wired from its domain [config]. Shared by creation and restart so both
+     * paths configure actors identically.
+     */
+    protected fun buildActor(
+        ref: ActorRef,
+        domain: String,
+        config: ActorConfig,
+        mailbox: MailBox,
+        runtimeScope: ActorScope,
+        handler: ActorHandler,
+        attributes: Attributes,
+        props: Props,
+    ): Actor = Actor(
+        ref = ref,
+        domain = domain,
+        actorSystem = actorSystem,
+        supervisorStrategy = config.supervisorStrategy,
+        supervisor = ref.supervisor,
+        mailbox = mailbox,
+        runtimeScope = runtimeScope,
+        handler = handler,
+        attributes = attributes,
+        idle = config.idle,
+        props = props,
+        supervisionTimeout = config.supervisionTimeout,
+    )
 
     /**
      * Single exit for every envelope that will never reach [ref]'s handler: reports it as

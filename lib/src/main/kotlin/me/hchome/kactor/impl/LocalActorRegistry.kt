@@ -5,7 +5,6 @@ import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.Props
-import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SystemMessage
 import me.hchome.kactor.UserMessage
 import me.hchome.kactor.isEmpty
@@ -60,15 +59,18 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
             callback.completeExceptionally(ActorSystemException("Actor[$ref] already exists"))
             return
         }
-        val supervisor: Supervisor = ref.supervisor
         val newRuntimeScope = ActorScopeImpl(systemJob, dispatcher)
         val newMailbox = createChannel(message, ref)
-        val newHandler = message.handler
         val newAttributes = AttributesImpl()
-        val newActor = Actor(
-            ref, message.domain, actorSystem, config.supervisorStrategy,
-            supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes, config.idle, message.props,
-            supervisionTimeout = config.supervisionTimeout,
+        val newActor = buildActor(
+            ref = ref,
+            domain = message.domain,
+            config = config,
+            mailbox = newMailbox,
+            runtimeScope = newRuntimeScope,
+            handler = message.handler,
+            attributes = newAttributes,
+            props = message.props,
         )
         // store all actor information
         registerActor(ref, newActor)
