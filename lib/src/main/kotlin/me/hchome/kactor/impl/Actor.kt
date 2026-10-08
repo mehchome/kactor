@@ -315,10 +315,7 @@ class Actor internal constructor(
      */
     context(ctx: ActorContext)
     private suspend fun processControl(msg: ActorEnvelope): Boolean = when (msg) {
-        is ActorEnvelope.SuperviseEnvelope -> {
-            handleSupervision(msg)
-            true
-        }
+        is ActorEnvelope.SuperviseEnvelope -> handleSupervision(msg)
         else -> dispatch(msg)
     }
 
@@ -370,14 +367,17 @@ class Actor internal constructor(
      * 5. Completes the [ActorEnvelope.SuperviseEnvelope.callback] so that the child's
      *    suspended [supervise] call can resume.
      *
-     * If [ActorHandler.onSupervise] throws, the callback is completed with
-     * [SupervisorStrategy.Decision.Restart] as a safe fallback before the exception propagates.
+     * If supervision itself throws, the callback is completed with
+     * [SupervisorStrategy.Decision.Restart] as a safe fallback, and the exception is treated as
+     * this actor's own failure: it is reported to [supervisor], just like a failure in [dispatch].
      *
      * @param envelope the supervision request, carrying the [ActorFailure] and the callback
      *   deferred that the failing child is awaiting
+     * @return `true` to keep the loop running; `false` when this actor's own supervisor
+     *   decided anything other than [SupervisorStrategy.Decision.Resume]
      */
     context(ctx: ActorContext)
-    private suspend fun handleSupervision(envelope: ActorEnvelope.SuperviseEnvelope) {
+    private suspend fun handleSupervision(envelope: ActorEnvelope.SuperviseEnvelope): Boolean {
         val failure = envelope.failure
         actorSystem.notifySystem(
             failure.sender, failure.ref, "Actor[${failure.ref}] failure",
@@ -391,22 +391,24 @@ class Actor internal constructor(
                 val escalated = failure.copy(ref = ref)
                 val escalatedDecision = supervisor.supervise(escalated)
                 envelope.callback.complete(escalatedDecision)
-                return
+                return true
             }
 
             applyDecision(failure.ref, decision)
             envelope.callback.complete(decision)
+            return true
         } catch (e: Throwable) {
             if (!envelope.callback.isCompleted) {
                 envelope.callback.complete(SupervisorStrategy.Decision.Restart)
             }
-            if (e !is CancellationException) {
-                actorSystem.notifySystem(
-                    failure.sender, ref, "Supervision handling failed: ${e.message}",
-                    ActorSystemNotificationMessage.NotificationType.ACTOR_EXCEPTION, e
-                )
-            }
-            throw e
+            if (e is CancellationException) throw e
+            actorSystem.notifySystem(
+                failure.sender, ref, "Supervision handling failed: ${e.message}",
+                ActorSystemNotificationMessage.NotificationType.ACTOR_EXCEPTION, e
+            )
+            // A broken supervisor is itself a failed actor: let its own supervisor decide.
+            val ownFailure = ActorFailure(ref, failure.sender, failure, e)
+            return supervisor.supervise(ownFailure) == SupervisorStrategy.Decision.Resume
         }
     }
 

@@ -47,6 +47,19 @@ class SupervisorStrategyTest {
         override suspend fun onSupervise(failure: ActorFailure) = SupervisorStrategy.Decision.Escalate
     }
 
+    // onSupervise itself throws; completes any CompletableDeferred<Unit> so liveness can be checked.
+    class BrokenSupervisorParent : ActorHandler {
+        context(context: ActorContext)
+        override suspend fun onSupervise(failure: ActorFailure): SupervisorStrategy.Decision =
+            throw IllegalStateException("broken supervisor")
+
+        context(context: ActorContext)
+        @Suppress("UNCHECKED_CAST")
+        override suspend fun onMessage(message: Any, sender: ActorRef) {
+            if (message is CompletableDeferred<*>) (message as CompletableDeferred<Unit>).complete(Unit)
+        }
+    }
+
     // Used to prove grandparent is NOT the supervisor of grandchildren.
     // Default onSupervise returns Restart; if a grandchild were to be Stopped
     // despite this, it means the immediate parent (StopParent) handled it correctly.
@@ -99,6 +112,10 @@ class SupervisorStrategyTest {
         )
         system.register<EscalateParent>(
             "EscalateParent",
+            config = ActorConfig(supervisorStrategy = SupervisorStrategy.OneForOne)
+        )
+        system.register<BrokenSupervisorParent>(
+            "BrokenSupervisorParent",
             config = ActorConfig(supervisorStrategy = SupervisorStrategy.OneForOne)
         )
         system.register<GrandparentActor>(
@@ -293,6 +310,27 @@ class SupervisorStrategyTest {
         system.send(child, "fail")
         withTimeout(3.seconds) { parentRestarted.await() }
 
+        assertTrue(parent in system)
+    }
+
+    @Test
+    fun `onSupervise throwing - supervisor failure is reported upward, supervisor restarts`() = runBlocking {
+        // BrokenSupervisorParent throws from onSupervise. That must count as the parent's own
+        // failure and go to its supervisor (the system, which restarts it), instead of
+        // silently ending the parent's mailbox loop.
+        val parent = system.actorOf<BrokenSupervisorParent>()
+        val child = system.actorOf<FailableActor>(parent = parent)
+
+        val parentRestarted = awaitNotificationFor(
+            ActorSystemNotificationMessage.NotificationType.ACTOR_RESTARTED, parent
+        )
+
+        system.send(child, "fail")
+        withTimeout(3.seconds) { parentRestarted.await() }
+
+        val check = CompletableDeferred<Unit>()
+        system.send(parent, check)
+        withTimeout(2.seconds) { check.await() }
         assertTrue(parent in system)
     }
 
