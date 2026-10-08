@@ -12,6 +12,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import me.hchome.kactor.ActorContext
 import me.hchome.kactor.BehaviorBlock
 import me.hchome.kactor.ActorFailure
@@ -65,6 +66,7 @@ private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, Co
  * @param attributes mutable key-value store attached to this actor instance
  * @param idle after this duration without a message [ActorHandler.onIdle] is invoked
  * @param props startup parameters this actor was spawned (or recreated) with
+ * @param supervisionTimeout maximum time [ActorHandler.onSupervise] may take before the failed child is restarted
  *
  * @see ActorSystem
  * @see ActorHandler
@@ -82,6 +84,7 @@ class Actor internal constructor(
     attributes: Attributes,
     private val idle: Duration,
     props: Props = Props.EMPTY,
+    private val supervisionTimeout: Duration = Duration.INFINITE,
 ) : Supervisor {
 
     private val context = ActorContextImpl(this, actorSystem, runtimeScope, attributes, props)
@@ -384,7 +387,18 @@ class Actor internal constructor(
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, failure.cause
         )
         try {
-            val decision = handler.onSupervise(failure)
+            val decision = if (supervisionTimeout.isFinite()) {
+                withTimeoutOrNull(supervisionTimeout) { handler.onSupervise(failure) } ?: run {
+                    actorSystem.notifySystem(
+                        failure.sender, failure.ref,
+                        "Supervision of Actor[${failure.ref}] by Actor[$ref] timed out after $supervisionTimeout",
+                        ActorSystemNotificationMessage.NotificationType.ACTOR_TIMEOUT, failure.cause
+                    )
+                    SupervisorStrategy.Decision.Restart
+                }
+            } else {
+                handler.onSupervise(failure)
+            }
 
             if (decision == SupervisorStrategy.Decision.Escalate) {
                 // Pass failure upward as if this supervisor itself failed.

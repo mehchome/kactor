@@ -67,7 +67,8 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         val newAttributes = AttributesImpl()
         val newActor = Actor(
             ref, message.domain, actorSystem, config.supervisorStrategy,
-            supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes, config.idle, message.props
+            supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes, config.idle, message.props,
+            supervisionTimeout = config.supervisionTimeout,
         )
         // store all actor information
         registerActor(ref, newActor)

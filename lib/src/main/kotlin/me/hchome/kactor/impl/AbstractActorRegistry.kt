@@ -143,7 +143,8 @@ abstract class AbstractActorRegistry : ActorRegistry {
             newHandler,
             actorAttributes[ref] ?: createAttribute(AttributesImpl()),
             config.idle,
-            props
+            props,
+            supervisionTimeout = config.supervisionTimeout,
         )
         actors[ref] = newActor
         childReferences(ref).forEach { rebuildActors(it) }
