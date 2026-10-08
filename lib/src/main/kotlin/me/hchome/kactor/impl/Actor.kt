@@ -1,5 +1,4 @@
 @file:Suppress("unused")
-
 package me.hchome.kactor.impl
 
 import kotlinx.coroutines.CompletableDeferred
@@ -29,7 +28,6 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
-import kotlin.uuid.ExperimentalUuidApi
 
 private typealias ActorHandlerScope = suspend ActorHandler.(Any, ActorRef) -> Unit
 private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, CompletableDeferred<in Any>) -> Unit
@@ -155,7 +153,6 @@ class Actor internal constructor(
      * @param block suspending lambda that receives the task's auto-generated id
      * @return the [Job] for the launched coroutine
      */
-    @OptIn(ExperimentalUuidApi::class)
     fun task(
         initDelay: Duration = Duration.ZERO,
         block: suspend ActorHandler.(String) -> Unit
@@ -179,7 +176,6 @@ class Actor internal constructor(
      * @param block suspending lambda that receives the schedule's auto-generated id
      * @return the [Job] for the launched coroutine; cancel it to stop the schedule
      */
-    @OptIn(ExperimentalUuidApi::class)
     fun schedule(
         period: Duration,
         initDelay: Duration = Duration.ZERO,
