@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.collect
 import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -306,13 +307,32 @@ sealed class TaskInfo @OptIn(ExperimentalUuidApi::class) constructor(
 
 /**
  * Actor configuration
+ *
+ * @property capacity buffer size of **each** user priority channel (HIGH and NORMAL are separate
+ *   buffers, so up to `2 * capacity` user messages can be queued). Must be positive.
+ *   System messages such as supervision requests use their own unbounded channel and never count
+ *   against it.
+ * @property onBufferOverflow what happens when a priority channel is full. Sending never suspends:
+ *   [BufferOverflow.SUSPEND] and [BufferOverflow.DROP_LATEST] reject the new message,
+ *   [BufferOverflow.DROP_OLDEST] evicts the oldest queued message instead. A rejected message fires
+ *   [ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED], and a rejected ask fails
+ *   with [MailboxFullException].
+ * @property supervisionTimeout maximum time [ActorHandler.onSupervise] may take. On timeout the
+ *   failed child is restarted and an [ActorSystemNotificationMessage.NotificationType.ACTOR_TIMEOUT]
+ *   notification is fired. This breaks deadlocks such as `onSupervise` asking the failed child,
+ *   which is itself waiting for the decision. [Duration.INFINITE] disables the timeout.
  */
 data class ActorConfig(
     val capacity: Int = 100,
     val onBufferOverflow: BufferOverflow = BufferOverflow.SUSPEND,
     val supervisorStrategy: SupervisorStrategy = SupervisorStrategy.OneForOne,
-    val idle: Duration = Duration.INFINITE
+    val idle: Duration = Duration.INFINITE,
+    val supervisionTimeout: Duration = 10.seconds,
 ) {
+    init {
+        require(capacity > 0) { "ActorConfig.capacity must be positive, was $capacity" }
+    }
+
     companion object {
         @JvmStatic
         val DEFAULT = ActorConfig()

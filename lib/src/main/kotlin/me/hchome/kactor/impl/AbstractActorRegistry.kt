@@ -2,6 +2,7 @@
 package me.hchome.kactor.impl
 
 import kotlinx.coroutines.Job
+import me.hchome.kactor.ActorConfig
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorRegistry
@@ -11,6 +12,7 @@ import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.Props
 import me.hchome.kactor.Supervisor
+import me.hchome.kactor.SupervisorStrategy
 import me.hchome.kactor.SystemMessage.CreateActor
 import me.hchome.kactor.isEmpty
 import me.hchome.kactor.isNotEmpty
@@ -87,8 +89,8 @@ abstract class AbstractActorRegistry : ActorRegistry {
 
     protected fun createChannel(message: CreateActor, ref: ActorRef): MailBox {
         val config = actorSystem[message.domain].config
-        return MailBox(config.capacity, config.onBufferOverflow) {
-            onUndeliveredMessage(it, ref)
+        return MailBox(config.capacity, config.onBufferOverflow) { envelope, cause ->
+            rejectEnvelope(envelope, ref, cause)
         }
     }
 
@@ -99,8 +101,8 @@ abstract class AbstractActorRegistry : ActorRegistry {
 
     protected fun rebuildChannels(ref: ActorRef) {
         val config = actors[ref]?.domain?.let { actorSystem[it].config } ?: return
-        val channel = MailBox(config.capacity, config.onBufferOverflow) {
-            onUndeliveredMessage(it, ref)
+        val channel = MailBox(config.capacity, config.onBufferOverflow) { envelope, cause ->
+            rejectEnvelope(envelope, ref, cause)
         }
         actorChannels[ref] = channel
         childReferences(ref).forEach { rebuildChannels(it) }
@@ -131,34 +133,66 @@ abstract class AbstractActorRegistry : ActorRegistry {
 
         val props = actorProps[ref] ?: Props.EMPTY
         val newHandler = configHolder.newActorHandler(props)
-        val newActor = Actor(
-            ref,
-            oldActor.domain,
-            actorSystem,
-            config.supervisorStrategy,
-            ref.supervisor,
-            targetChannel,
-            targetScope,
-            newHandler,
-            actorAttributes[ref] ?: createAttribute(AttributesImpl()),
-            config.idle,
-            props
+        val newActor = buildActor(
+            ref = ref,
+            domain = oldActor.domain,
+            config = config,
+            mailbox = targetChannel,
+            runtimeScope = targetScope,
+            handler = newHandler,
+            attributes = actorAttributes[ref] ?: createAttribute(AttributesImpl()),
+            props = props,
         )
         actors[ref] = newActor
         childReferences(ref).forEach { rebuildActors(it) }
     }
 
-    protected fun onUndeliveredMessage(wrapper: ActorEnvelope, ref: ActorRef) {
-        val message = wrapper.message
-        val sender = wrapper.sender
-        val formattedMessage = "Undelivered message: $message"
+    /**
+     * Builds an [Actor] wired from its domain [config]. Shared by creation and restart so both
+     * paths configure actors identically.
+     */
+    protected fun buildActor(
+        ref: ActorRef,
+        domain: String,
+        config: ActorConfig,
+        mailbox: MailBox,
+        runtimeScope: ActorScope,
+        handler: ActorHandler,
+        attributes: Attributes,
+        props: Props,
+    ): Actor = Actor(
+        ref = ref,
+        domain = domain,
+        actorSystem = actorSystem,
+        supervisorStrategy = config.supervisorStrategy,
+        supervisor = ref.supervisor,
+        mailbox = mailbox,
+        runtimeScope = runtimeScope,
+        handler = handler,
+        attributes = attributes,
+        idle = config.idle,
+        props = props,
+        supervisionTimeout = config.supervisionTimeout,
+    )
+
+    /**
+     * Single exit for every envelope that will never reach [ref]'s handler: reports it as
+     * undelivered and completes whatever the sender is waiting on, so nothing hangs.
+     */
+    protected fun rejectEnvelope(envelope: ActorEnvelope, ref: ActorRef, cause: Throwable) {
+        when (envelope) {
+            is ActorEnvelope.AskActorEnvelope<*> -> envelope.callback.completeExceptionally(cause)
+            // The supervisor is gone (stopped or recreated); the failed child should stop too.
+            is ActorEnvelope.SuperviseEnvelope -> envelope.callback.complete(SupervisorStrategy.Decision.Stop)
+            is ActorEnvelope.SendActorEnvelope -> {}
+        }
         actorSystem.notifySystem(
-            sender,
+            envelope.sender,
             ref,
-            formattedMessage,
+            "Message can't be delivered to $ref: ${cause.message}",
             ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED,
-            null,
-            message
+            cause,
+            envelope.message
         )
     }
 

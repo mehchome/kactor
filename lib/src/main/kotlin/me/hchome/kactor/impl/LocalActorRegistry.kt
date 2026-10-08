@@ -5,7 +5,6 @@ import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.Props
-import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SystemMessage
 import me.hchome.kactor.UserMessage
 import me.hchome.kactor.isEmpty
@@ -18,7 +17,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
     override val actorAttributes = ConcurrentHashMap<ActorRef, Attributes>()
     override val actorProps = ConcurrentHashMap<ActorRef, Props>()
 
-    override suspend fun tell(tell: UserMessage.Tell) {
+    override fun tell(tell: UserMessage.Tell) {
         val (target, sender, message, priority) = tell
         actors[target]?.also { actor ->
             actor.send(message, sender, priority)
@@ -34,7 +33,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         }
     }
 
-    override suspend fun ask(ask: UserMessage.Ask) {
+    override fun ask(ask: UserMessage.Ask) {
         val (target, sender, message, priority, callback) = ask
         actors[target]?.also { actor ->
             actor.ask(message, sender, callback, priority)
@@ -60,14 +59,18 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
             callback.completeExceptionally(ActorSystemException("Actor[$ref] already exists"))
             return
         }
-        val supervisor: Supervisor = ref.supervisor
         val newRuntimeScope = ActorScopeImpl(systemJob, dispatcher)
         val newMailbox = createChannel(message, ref)
-        val newHandler = message.handler
         val newAttributes = AttributesImpl()
-        val newActor = Actor(
-            ref, message.domain, actorSystem, config.supervisorStrategy,
-            supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes, config.idle, message.props
+        val newActor = buildActor(
+            ref = ref,
+            domain = message.domain,
+            config = config,
+            mailbox = newMailbox,
+            runtimeScope = newRuntimeScope,
+            handler = message.handler,
+            attributes = newAttributes,
+            props = message.props,
         )
         // store all actor information
         registerActor(ref, newActor)
@@ -92,7 +95,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
 
     override fun stopActor(ref: ActorRef) {
         if (ref.isEmpty()) return
-        closeChannels(ref)
+        cancelChannels(ref)
         cancelAndCleanup(ref)
         actorSystem.notifySystem(
             ActorRef.EMPTY,
@@ -117,7 +120,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         actors[ref] ?: return
         val runtimeScope = runtimeScopes[ref] ?: return
         if (recreate) {
-            closeChannels(ref)
+            cancelChannels(ref)
         }
         runtimeScope.cancel()
         // rebuild actor environment
@@ -136,10 +139,11 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         return AttributesImpl(old)
     }
 
-    private fun closeChannels(ref: ActorRef) {
+    private fun cancelChannels(ref: ActorRef) {
         val childRefs = childReferences(ref)
-        childRefs.forEach { closeChannels(it) }
-        actorChannels[ref]?.close()
+        childRefs.forEach { cancelChannels(it) }
+        // cancel (not close) so envelopes still buffered are rejected instead of silently lost
+        actorChannels[ref]?.cancel()
     }
 
 
