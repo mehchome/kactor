@@ -92,7 +92,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
 
     override fun stopActor(ref: ActorRef) {
         if (ref.isEmpty()) return
-        closeChannels(ref)
+        cancelChannels(ref)
         cancelAndCleanup(ref)
         actorSystem.notifySystem(
             ActorRef.EMPTY,
@@ -117,7 +117,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         actors[ref] ?: return
         val runtimeScope = runtimeScopes[ref] ?: return
         if (recreate) {
-            closeChannels(ref)
+            cancelChannels(ref)
         }
         runtimeScope.cancel()
         // rebuild actor environment
@@ -136,10 +136,11 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         return AttributesImpl(old)
     }
 
-    private fun closeChannels(ref: ActorRef) {
+    private fun cancelChannels(ref: ActorRef) {
         val childRefs = childReferences(ref)
-        childRefs.forEach { closeChannels(it) }
-        actorChannels[ref]?.close()
+        childRefs.forEach { cancelChannels(it) }
+        // cancel (not close) so envelopes still buffered are rejected instead of silently lost
+        actorChannels[ref]?.cancel()
     }
 
 

@@ -306,6 +306,16 @@ sealed class TaskInfo @OptIn(ExperimentalUuidApi::class) constructor(
 
 /**
  * Actor configuration
+ *
+ * @property capacity buffer size of **each** user priority channel (HIGH and NORMAL are separate
+ *   buffers, so up to `2 * capacity` user messages can be queued). Must be positive.
+ *   System messages such as supervision requests use their own unbounded channel and never count
+ *   against it.
+ * @property onBufferOverflow what happens when a priority channel is full. Sending never suspends:
+ *   [BufferOverflow.SUSPEND] and [BufferOverflow.DROP_LATEST] reject the new message,
+ *   [BufferOverflow.DROP_OLDEST] evicts the oldest queued message instead. A rejected message fires
+ *   [ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED], and a rejected ask fails
+ *   with [MailboxFullException].
  */
 data class ActorConfig(
     val capacity: Int = 100,
@@ -313,6 +323,10 @@ data class ActorConfig(
     val supervisorStrategy: SupervisorStrategy = SupervisorStrategy.OneForOne,
     val idle: Duration = Duration.INFINITE
 ) {
+    init {
+        require(capacity > 0) { "ActorConfig.capacity must be positive, was $capacity" }
+    }
+
     companion object {
         @JvmStatic
         val DEFAULT = ActorConfig()
