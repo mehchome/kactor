@@ -53,10 +53,10 @@ interface ActorRegistry: ActorSystemInitializationListener {
     /**
      * tell actor
      */
-    suspend fun tell(tell: UserMessage.Tell)
+    fun tell(tell: UserMessage.Tell)
 
     /**
      * Ask actor
      */
-    suspend fun ask(ask: UserMessage.Ask)
+    fun ask(ask: UserMessage.Ask)
 }

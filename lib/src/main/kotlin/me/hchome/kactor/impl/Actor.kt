@@ -7,10 +7,12 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.selects.onTimeout
-import kotlinx.coroutines.selects.whileSelect
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import me.hchome.kactor.ActorContext
 import me.hchome.kactor.BehaviorBlock
 import me.hchome.kactor.ActorFailure
@@ -64,6 +66,7 @@ private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, Co
  * @param attributes mutable key-value store attached to this actor instance
  * @param idle after this duration without a message [ActorHandler.onIdle] is invoked
  * @param props startup parameters this actor was spawned (or recreated) with
+ * @param supervisionTimeout maximum time [ActorHandler.onSupervise] may take before the failed child is restarted
  *
  * @see ActorSystem
  * @see ActorHandler
@@ -81,6 +84,7 @@ class Actor internal constructor(
     attributes: Attributes,
     private val idle: Duration,
     props: Props = Props.EMPTY,
+    private val supervisionTimeout: Duration = Duration.INFINITE,
 ) : Supervisor {
 
     private val context = ActorContextImpl(this, actorSystem, runtimeScope, attributes, props)
@@ -106,17 +110,16 @@ class Actor internal constructor(
     /**
      * Enqueues a fire-and-forget message into the mailbox.
      *
-     * The send is non-blocking from the caller's perspective: the envelope is placed on the
-     * mailbox channel inside a coroutine launched on [runtimeScope].
+     * The envelope is offered to the mailbox synchronously, so messages from the same caller
+     * keep their order. If the mailbox rejects it (full or closed), it is reported as
+     * [ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED].
      *
      * @param message payload to deliver to [ActorHandler.onMessage]
      * @param sender originating actor reference, or [ActorRef.EMPTY] if anonymous
      * @param priority [MessagePriority.HIGH] messages are processed before [MessagePriority.NORMAL] ones
      */
     fun send(message: Any, sender: ActorRef, priority: MessagePriority = MessagePriority.NORMAL) {
-        runtimeScope.launch {
-            mailbox.send(ActorEnvelope.SendActorEnvelope(message, sender), priority)
-        }
+        mailbox.offer(ActorEnvelope.SendActorEnvelope(message, sender), priority)
     }
 
     /**
@@ -125,6 +128,8 @@ class Actor internal constructor(
      * The [callback] deferred is completed by [ActorHandler.onAsk] once the handler produces
      * a reply. If the actor fails while processing the message and the supervisor decides
      * [SupervisorStrategy.Decision.Resume], the callback is completed exceptionally.
+     * If the mailbox rejects the message, the callback is completed exceptionally with
+     * [me.hchome.kactor.MailboxFullException] or [me.hchome.kactor.MailboxClosedException].
      *
      * @param T expected reply type
      * @param message payload to deliver to [ActorHandler.onAsk]
@@ -138,9 +143,7 @@ class Actor internal constructor(
         callback: CompletableDeferred<in T>,
         priority: MessagePriority = MessagePriority.NORMAL
     ) {
-        runtimeScope.launch {
-            mailbox.send(ActorEnvelope.AskActorEnvelope(message, sender, callback), priority)
-        }
+        mailbox.offer(ActorEnvelope.AskActorEnvelope(message, sender, callback), priority)
     }
 
     /**
@@ -196,8 +199,10 @@ class Actor internal constructor(
      *
      * Implements [Supervisor] so that child actors can call this method when they catch
      * an unhandled exception in their mailbox loop. The [failure] is wrapped in a
-     * [ActorEnvelope.SuperviseEnvelope] and placed on the **high-priority** channel so it
-     * is processed before any pending normal messages.
+     * [ActorEnvelope.SuperviseEnvelope] and placed on the mailbox's **control** channel, which is
+     * unbounded and read before any user message, so it is never dropped or delayed by user traffic.
+     * If this actor's mailbox is already cancelled, the request is rejected with
+     * [SupervisorStrategy.Decision.Stop].
      *
      * This method suspends until [handleSupervision] completes and the
      * [SupervisorStrategy.Decision] is determined by [ActorHandler.onSupervise].
@@ -208,7 +213,7 @@ class Actor internal constructor(
      */
     override suspend fun supervise(failure: ActorFailure): SupervisorStrategy.Decision {
         val callback = CompletableDeferred<SupervisorStrategy.Decision>()
-        mailbox.send(ActorEnvelope.SuperviseEnvelope(failure, callback), MessagePriority.HIGH)
+        mailbox.offerControl(ActorEnvelope.SuperviseEnvelope(failure, callback))
         return callback.await()
     }
 
@@ -217,11 +222,12 @@ class Actor internal constructor(
      *
      * Launches a coroutine in [runtimeScope] that:
      * 1. Calls [ActorHandler.preStart].
-     * 2. Enters a `whileSelect` loop that drains both priority channels—high before low—and
-     *    fires [ActorHandler.onIdle] whenever [idle] elapses without a message.
-     * 3. Handles [ActorEnvelope.SuperviseEnvelope] inline (bypassing [dispatch]) so that
-     *    supervision decisions do not interfere with normal message flow.
-     * 4. Exits the loop when both channels close or [dispatch] signals a fatal decision.
+     * 2. Drains the mailbox in order control → high → low via `tryReceive`, falling back to a
+     *    `select` only when all are empty; fires [ActorHandler.onIdle] (finite [idle] only)
+     *    whenever [idle] elapses without a message.
+     * 3. Handles [ActorEnvelope.SuperviseEnvelope] from the control channel inline (bypassing
+     *    [dispatch]) so that supervision decisions do not interfere with normal message flow.
+     * 4. Exits the loop when the mailbox is cancelled or a handler signals a fatal decision.
      * 5. Calls [ActorHandler.postStop] under [NonCancellable] to guarantee cleanup even
      *    when the coroutine is cancelled externally.
      *
@@ -233,47 +239,49 @@ class Actor internal constructor(
     fun startActor() {
         mailBoxJob = runtimeScope.launch {
             context(context) {
-                var highOpen = true
-                var lowOpen = true
+                val idleEnabled = idle.isFinite()
                 try {
                     handler.preStart()
-                    whileSelect {
-                        if (highOpen) {
+                    while (true) {
+                        // tryReceive never checks cancellation, so a busy mailbox must do it here.
+                        ensureActive()
+                        // Fast path: drain already-queued messages without allocating a select.
+                        val control = mailbox.controlChannel.tryReceive()
+                        if (control.isSuccess) {
+                            if (!processControl(control.getOrThrow())) break
+                            continue
+                        }
+                        val high = mailbox.highPriorityChannel.tryReceive()
+                        if (high.isSuccess) {
+                            if (!dispatch(high.getOrThrow())) break
+                            continue
+                        }
+                        val low = mailbox.lowPriorityChannel.tryReceive()
+                        if (low.isSuccess) {
+                            if (!dispatch(low.getOrThrow())) break
+                            continue
+                        }
+                        // Channels are only ever cancelled together, with the whole mailbox.
+                        if (control.isClosed || high.isClosed || low.isClosed) break
+                        // Slow path: mailbox empty, suspend until a message arrives or idle elapses.
+                        val keepRunning = select {
+                            mailbox.controlChannel.onReceiveCatching { result ->
+                                result.getOrNull()?.let { processControl(it) } ?: false
+                            }
                             mailbox.highPriorityChannel.onReceiveCatching { result ->
-                                val msg = result.getOrNull()
-                                if (msg == null) {
-                                    highOpen = false
-                                    lowOpen
-                                } else {
-                                    when (msg) {
-                                        is ActorEnvelope.SuperviseEnvelope -> {
-                                            handleSupervision(msg)
-                                            true
-                                        }
-                                        else -> dispatch(msg).also {
-                                            if (!it) { highOpen = false; lowOpen = false }
-                                        }
-                                    }
-                                }
+                                result.getOrNull()?.let { dispatch(it) } ?: false
                             }
-                        }
-                        if (lowOpen) {
                             mailbox.lowPriorityChannel.onReceiveCatching { result ->
-                                val msg = result.getOrNull()
-                                if (msg == null) {
-                                    lowOpen = false
-                                    highOpen
-                                } else {
-                                    dispatch(msg).also {
-                                        if (!it) { highOpen = false; lowOpen = false }
-                                    }
+                                result.getOrNull()?.let { dispatch(it) } ?: false
+                            }
+                            if (idleEnabled) {
+                                onTimeout(idle) {
+                                    handler.onIdle()
+                                    true
                                 }
                             }
                         }
-                        onTimeout(idle) {
-                            handler.onIdle()
-                            true
-                        }
+                        if (!keepRunning) break
                     }
                 } catch (e: CancellationException) {
                     LOGGER.debug("Actor cancelled: {}", ref)
@@ -304,6 +312,16 @@ class Actor internal constructor(
      * @param msg the envelope dequeued from the mailbox
      * @return `true` to keep the loop running; `false` to exit
      */
+    /**
+     * Handles an envelope from the control channel: supervision requests are handled
+     * inline, anything else goes through [dispatch].
+     */
+    context(ctx: ActorContext)
+    private suspend fun processControl(msg: ActorEnvelope): Boolean = when (msg) {
+        is ActorEnvelope.SuperviseEnvelope -> handleSupervision(msg)
+        else -> dispatch(msg)
+    }
+
     @Suppress("UNCHECKED_CAST")
     context(ctx: ActorContext)
     private suspend fun dispatch(msg: ActorEnvelope): Boolean {
@@ -352,43 +370,59 @@ class Actor internal constructor(
      * 5. Completes the [ActorEnvelope.SuperviseEnvelope.callback] so that the child's
      *    suspended [supervise] call can resume.
      *
-     * If [ActorHandler.onSupervise] throws, the callback is completed with
-     * [SupervisorStrategy.Decision.Restart] as a safe fallback before the exception propagates.
+     * If supervision itself throws, the callback is completed with
+     * [SupervisorStrategy.Decision.Restart] as a safe fallback, and the exception is treated as
+     * this actor's own failure: it is reported to [supervisor], just like a failure in [dispatch].
      *
      * @param envelope the supervision request, carrying the [ActorFailure] and the callback
      *   deferred that the failing child is awaiting
+     * @return `true` to keep the loop running; `false` when this actor's own supervisor
+     *   decided anything other than [SupervisorStrategy.Decision.Resume]
      */
     context(ctx: ActorContext)
-    private suspend fun handleSupervision(envelope: ActorEnvelope.SuperviseEnvelope) {
+    private suspend fun handleSupervision(envelope: ActorEnvelope.SuperviseEnvelope): Boolean {
         val failure = envelope.failure
         actorSystem.notifySystem(
             failure.sender, failure.ref, "Actor[${failure.ref}] failure",
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, failure.cause
         )
         try {
-            val decision = handler.onSupervise(failure)
+            val decision = if (supervisionTimeout.isFinite()) {
+                withTimeoutOrNull(supervisionTimeout) { handler.onSupervise(failure) } ?: run {
+                    actorSystem.notifySystem(
+                        failure.sender, failure.ref,
+                        "Supervision of Actor[${failure.ref}] by Actor[$ref] timed out after $supervisionTimeout",
+                        ActorSystemNotificationMessage.NotificationType.ACTOR_TIMEOUT, failure.cause
+                    )
+                    SupervisorStrategy.Decision.Restart
+                }
+            } else {
+                handler.onSupervise(failure)
+            }
 
             if (decision == SupervisorStrategy.Decision.Escalate) {
                 // Pass failure upward as if this supervisor itself failed.
                 val escalated = failure.copy(ref = ref)
                 val escalatedDecision = supervisor.supervise(escalated)
                 envelope.callback.complete(escalatedDecision)
-                return
+                return true
             }
 
             applyDecision(failure.ref, decision)
             envelope.callback.complete(decision)
+            return true
         } catch (e: Throwable) {
             if (!envelope.callback.isCompleted) {
                 envelope.callback.complete(SupervisorStrategy.Decision.Restart)
             }
-            if (e !is CancellationException) {
-                actorSystem.notifySystem(
-                    failure.sender, ref, "Supervision handling failed: ${e.message}",
-                    ActorSystemNotificationMessage.NotificationType.ACTOR_EXCEPTION, e
-                )
-            }
-            throw e
+            if (e is CancellationException) throw e
+            actorSystem.notifySystem(
+                failure.sender, ref, "Supervision handling failed: ${e.message}",
+                ActorSystemNotificationMessage.NotificationType.ACTOR_EXCEPTION, e
+            )
+            // A broken supervisor is itself a failed actor: let its own supervisor decide.
+            val ownFailure = ActorFailure(ref, failure.sender, failure, e)
+            return supervisor.supervise(ownFailure) == SupervisorStrategy.Decision.Resume
         }
     }
 

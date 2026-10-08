@@ -12,6 +12,9 @@ plugins {
     // Apply the org.jetbrains.kotlin.jvm Plugin to add support for Kotlin.
     alias(libs.plugins.jvm)
 
+    // KDoc -> HTML; javadoc's own tool only reads Java sources, so it would publish an empty jar.
+    alias(libs.plugins.dokka)
+
     // Apply the java-library plugin for API and implementation separation.
     `java-library`
     `maven-publish`
@@ -82,6 +85,22 @@ java {
     }
 }
 
+dokka {
+    moduleName.set("kactor")
+    dokkaSourceSets.configureEach {
+        // implementation details, not part of the public API
+        perPackageOption {
+            matchingRegex.set("""me\.hchome\.kactor\.impl.*""")
+            suppress.set(true)
+        }
+    }
+}
+
+// Fill the standard javadoc jar (and its published variant) with the Dokka HTML output.
+tasks.named<Jar>("javadocJar") {
+    from(tasks.dokkaGeneratePublicationHtml.flatMap { it.outputDirectory })
+}
+
 idea {
 
     module {
@@ -102,9 +121,8 @@ publishing {
             artifactId = "kactor"
             version = project.version.toString()
 
-            from(components["kotlin"])
-            artifact(tasks.named("sourcesJar").get())
-            artifact(tasks.named("javadocJar").get())
+            // the java component carries the sources and javadoc variants into both POM and module metadata
+            from(components["java"])
         }
 
     }
