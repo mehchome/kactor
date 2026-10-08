@@ -6,7 +6,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -18,7 +17,6 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
 import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
-import me.hchome.kactor.isEmpty
 import me.hchome.kactor.ActorHandlerFactory
 import me.hchome.kactor.ActorHandlerRegistry
 import me.hchome.kactor.ActorRef
@@ -94,7 +92,7 @@ internal class ActorSystemImpl(
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class, ExperimentalUuidApi::class)
+    @OptIn(ExperimentalUuidApi::class)
     override suspend fun <T : ActorHandler> actorOfSuspend(
         id: String?,
         parent: ActorRef,
@@ -253,7 +251,7 @@ internal class ActorSystemImpl(
         val decision = SupervisorStrategy.Decision.Restart
         when (supervisorStrategy) {
             SupervisorStrategy.OneForOne -> processFailure(failure.ref, decision)
-            SupervisorStrategy.AllForOne -> all.filter { it.parentOf().isEmpty() }.forEach {
+            SupervisorStrategy.AllForOne -> all.filter { !it.hasParent }.forEach {
                 processFailure(it, decision)
             }
         }

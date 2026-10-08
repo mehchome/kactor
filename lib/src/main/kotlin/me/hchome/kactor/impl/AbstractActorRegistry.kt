@@ -1,3 +1,4 @@
+@file:Suppress("unused")
 package me.hchome.kactor.impl
 
 import kotlinx.coroutines.Job
@@ -13,8 +14,8 @@ import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SystemMessage.CreateActor
 import me.hchome.kactor.isEmpty
 import me.hchome.kactor.isNotEmpty
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.collections.set
-import kotlin.uuid.ExperimentalUuidApi
 
 abstract class AbstractActorRegistry : ActorRegistry {
 
@@ -34,6 +35,30 @@ abstract class AbstractActorRegistry : ActorRegistry {
     override val all: Set<ActorRef>
         get() = actors.keys
 
+    // parent -> children index, so child lookups don't scan every actor and allocate a Set per call
+    private val childIndex = ConcurrentHashMap<ActorRef, MutableSet<ActorRef>>()
+
+    /**
+     * Live, read-only view of [parent]'s children. It is weakly consistent: safe to iterate while
+     * children are being added or removed, but it may or may not reflect those concurrent changes.
+     */
+    override fun childReferences(parent: ActorRef): Set<ActorRef> = childIndex[parent] ?: emptySet()
+
+    protected fun registerActor(ref: ActorRef, actor: Actor) {
+        actors[ref] = actor
+        if (ref.hasParent) {
+            childIndex.computeIfAbsent(ref.parentOf()) { ConcurrentHashMap.newKeySet() }.add(ref)
+        }
+    }
+
+    protected fun unregisterActor(ref: ActorRef) {
+        actors.remove(ref)
+        childIndex.remove(ref)
+        if (ref.hasParent) {
+            childIndex[ref.parentOf()]?.remove(ref)
+        }
+    }
+
     override fun afterInit(
         system: ActorSystem,
         systemJob: Job,
@@ -51,7 +76,6 @@ abstract class AbstractActorRegistry : ActorRegistry {
     protected fun getRuntimeScope(ref: ActorRef): ActorScope =
         runtimeScopes[ref] ?: throw ActorSystemException("Actor[$ref] runtime not found")
 
-    @OptIn(ExperimentalUuidApi::class)
     protected fun buildActorId(
         parent: ActorRef,
         id: String,
