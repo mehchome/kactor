@@ -1,7 +1,6 @@
 package me.hchome.kactor
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterEach
@@ -20,8 +19,8 @@ class ActorSystemTest {
     // Completes any CompletableDeferred<String> it receives with [prefix] (default "ok"),
     // so tests can verify that Props supplied to actorOf/newActor reach the constructor.
     class EchoActor(private val prefix: String = "ok") : ActorHandler {
-        context(context: ActorContext)
         @Suppress("UNCHECKED_CAST")
+        context(context: ActorContext)
         override suspend fun onMessage(message: Any, sender: ActorRef) {
             (message as? CompletableDeferred<String>)?.complete(prefix)
         }
@@ -37,8 +36,8 @@ class ActorSystemTest {
 
     // Throws on "fail"; completes CompletableDeferred<Unit> on any other message
     class FailActor : ActorHandler {
-        context(context: ActorContext)
         @Suppress("UNCHECKED_CAST")
+        context(context: ActorContext)
         override suspend fun onMessage(message: Any, sender: ActorRef) {
             when (message) {
                 "fail" -> throw RuntimeException("intentional failure")
@@ -50,8 +49,8 @@ class ActorSystemTest {
     // Throws on "fail"; otherwise completes a CompletableDeferred<String> with [prefix]
     // (default "ok"), letting tests verify Props survive an actor restart/recreate.
     class RestartPropsActor(private val prefix: String = "ok") : ActorHandler {
-        context(context: ActorContext)
         @Suppress("UNCHECKED_CAST")
+        context(context: ActorContext)
         override suspend fun onMessage(message: Any, sender: ActorRef) {
             when (message) {
                 "fail" -> throw RuntimeException("intentional failure")
@@ -64,8 +63,8 @@ class ActorSystemTest {
     class IdleActor : ActorHandler {
         private var signal: CompletableDeferred<Unit>? = null
 
-        context(context: ActorContext)
         @Suppress("UNCHECKED_CAST")
+        context(context: ActorContext)
         override suspend fun onMessage(message: Any, sender: ActorRef) {
             signal = message as? CompletableDeferred<Unit>
         }
@@ -207,6 +206,27 @@ class ActorSystemTest {
         assertTrue(child in parentChildren)
         assertFalse(grandchild in parentChildren)
         assertTrue(grandchild in childChildren)
+
+        system.destroyActor(parent)
+    }
+
+    @Test
+    fun `childReferences drops a child once it is stopped`() = runBlocking {
+        val parent = system.actorOf<EchoActor>()
+        val child1 = system.actorOf<EchoActor>(parent = parent)
+        val child2 = system.actorOf<EchoActor>(parent = parent)
+        assertEquals(setOf(child1, child2), system.childReferences(parent))
+
+        val child1Destroyed = CompletableDeferred<Unit>()
+        system += ActorSystemMessageListener { msg ->
+            if (msg.type == ActorSystemNotificationMessage.NotificationType.ACTOR_DESTROYED && msg.receiver == child1) {
+                child1Destroyed.complete(Unit)
+            }
+        }
+        system.destroyActor(child1)
+        withTimeout(3.seconds) { child1Destroyed.await() }
+
+        assertEquals(setOf(child2), system.childReferences(parent))
 
         system.destroyActor(parent)
     }

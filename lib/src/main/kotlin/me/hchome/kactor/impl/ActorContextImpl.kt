@@ -13,7 +13,6 @@ import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
-import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.BehaviorBlock
 import me.hchome.kactor.MessagePriority
@@ -65,14 +64,18 @@ internal data class ActorContextImpl(
         }
     }
 
+    // Single-child lookups go straight to the registry instead of materializing `children`,
+    // which scans every actor and allocates a fresh Set per call.
+    override fun contains(childRef: ActorRef): Boolean = self.ref.isParentOf(childRef) && childRef in system
+
+    override fun isChild(childRef: ActorRef): Boolean = childRef in this
+
     override fun getChild(id: String): ActorRef {
-        return system.childReferences(self.ref).firstOrNull { it.name.contentEquals(id) } ?: ActorRef.EMPTY
+        return self.ref.childOf(id).takeIf { it in this } ?: ActorRef.EMPTY
     }
 
     override fun sendChild(childRef: ActorRef, message: Any, priority: MessagePriority) {
-        children.firstOrNull { it == childRef }.also {
-            system.send(it ?: ActorRef.EMPTY, self.ref, message, priority)
-        }
+        system.send(if (childRef in this) childRef else ActorRef.EMPTY, self.ref, message, priority)
     }
 
     override fun sendParent(message: Any, priority: MessagePriority) {
