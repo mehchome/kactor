@@ -10,10 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.onSuccess
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
 import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
@@ -55,8 +52,7 @@ internal class ActorSystemImpl(
     ActorHandlerRegistry by ActorHandlerRegistryImpl(Dispatchers.Default, handlerFactory) {
     private val systemJob = SupervisorJob()
     private val systemScope = CoroutineScope(systemJob + Dispatchers.Default)
-    private val systemMailbox: Channel<SystemMessage> = Channel(64)
-    private val userMailbox: Channel<UserMessage> = Channel(1024)
+    private val systemMailbox: Channel<SystemMessage> = Channel(512)
 
     val all: Set<ActorRef> get() = actorRegistry.all
 
@@ -113,11 +109,8 @@ internal class ActorSystemImpl(
             throw ActorSystemException("Actor system not running")
         }
         val deferred = CompletableDeferred<ActorRef>()
-        val result = systemMailbox.trySend(CreateActor(id, parent, domain, deferred, props))
-        if (result.isFailure) {
-            deferred.cancel(CancellationException(result.exceptionOrNull()?.message ?: "Actor creation failed"))
-        }
         return withTimeout(1.minutes) {
+            systemMailbox.send(CreateActor(id, parent, domain, deferred, props))
             deferred.await()
         }
     }
@@ -126,23 +119,8 @@ internal class ActorSystemImpl(
         mailboxJob?.cancel()
         mailboxJob = systemScope.launch {
             try {
-                while (isActive) {
-                    systemMailbox.tryReceive().getOrNull()?.also {
-                        handleSystemMessage(it)
-                        continue
-                    }
-                    select {
-                        systemMailbox.onReceiveCatching { result ->
-                            result.onSuccess {
-                                handleSystemMessage(it)
-                            }
-                        }
-                        userMailbox.onReceiveCatching { result ->
-                            result.onSuccess {
-                                handleUserMessage(it)
-                            }
-                        }
-                    }
+                for (message in systemMailbox) {
+                    handleSystemMessage(message)
                 }
             } catch (e: CancellationException) {
                 LOGGER.debug("Actor system mailboxes job cancelled")
@@ -177,15 +155,7 @@ internal class ActorSystemImpl(
         if (!runningFlag.load()) {
             throw ActorSystemException("Actor system not running")
         }
-        val result = userMailbox.trySend(UserMessage.Tell(actorRef, sender, message, priority))
-        if (result.isFailure) {
-            notifySystem(
-                sender,
-                actorRef,
-                "Actor mailbox full, $message",
-                ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
-            )
-        }
+        actorRegistry.tell(UserMessage.Tell(actorRef, sender, message, priority))
     }
 
 
@@ -199,16 +169,7 @@ internal class ActorSystemImpl(
             throw ActorSystemException("Actor system not running")
         }
         val deferred = CompletableDeferred<T>()
-        val result = userMailbox.trySend(UserMessage.Ask(actorRef, sender, message, priority, deferred))
-        if (result.isFailure) {
-            notifySystem(
-                sender,
-                actorRef,
-                "Actor mailbox full, $message",
-                ActorSystemNotificationMessage.NotificationType.MESSAGE_UNDELIVERED
-            )
-            deferred.cancel(CancellationException(result.exceptionOrNull()?.message ?: "Actor mailbox full, $message"))
-        }
+        actorRegistry.ask(UserMessage.Ask(actorRef, sender, message, priority, deferred))
         return deferred
     }
 
@@ -272,11 +233,6 @@ internal class ActorSystemImpl(
             ActorSystemNotificationMessage.NotificationType.SYSTEM_ERROR,
             e
         )
-    }
-
-    private suspend fun handleUserMessage(message: UserMessage): Unit = when (message) {
-        is UserMessage.Tell -> actorRegistry.tell(message)
-        is UserMessage.Ask -> actorRegistry.ask(message)
     }
 
     companion object {

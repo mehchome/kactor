@@ -18,7 +18,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
     override val actorAttributes = ConcurrentHashMap<ActorRef, Attributes>()
     override val actorProps = ConcurrentHashMap<ActorRef, Props>()
 
-    override suspend fun tell(tell: UserMessage.Tell) {
+    override fun tell(tell: UserMessage.Tell) {
         val (target, sender, message, priority) = tell
         actors[target]?.also { actor ->
             actor.send(message, sender, priority)
@@ -34,7 +34,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         }
     }
 
-    override suspend fun ask(ask: UserMessage.Ask) {
+    override fun ask(ask: UserMessage.Ask) {
         val (target, sender, message, priority, callback) = ask
         actors[target]?.also { actor ->
             actor.ask(message, sender, callback, priority)
