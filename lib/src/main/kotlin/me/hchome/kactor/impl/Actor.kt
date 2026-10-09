@@ -427,7 +427,7 @@ class Actor internal constructor(
     private suspend fun handleSupervision(envelope: ActorEnvelope.SuperviseEnvelope): Boolean {
         val failure = envelope.failure
         actorSystem.notifySystem(
-            failure.sender, failure.ref, "Actor[${failure.ref}] failure",
+            failure.sender, failure.ref, "Actor[${failure.ref}] failure [${failure.code}]",
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, failure.cause
         )
         try {

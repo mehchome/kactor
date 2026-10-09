@@ -73,6 +73,15 @@ interface ActorHandler {
      * The default decision is [SupervisorStrategy.Decision.Restart], except for a failed
      * [preStart] ([ActorInitializationException]), which is [SupervisorStrategy.Decision.Stop]:
      * restarting would usually fail again, in a loop.
+     *
+     * To decide by failure type, throw an [ActorException] from the child and match its code:
+     * ```kotlin
+     * override suspend fun onSupervise(failure: ActorFailure) = when (failure.code) {
+     *     "PAYMENT_DECLINED" -> SupervisorStrategy.Decision.Resume
+     *     ActorInitializationException.CODE -> SupervisorStrategy.Decision.Stop
+     *     else -> SupervisorStrategy.Decision.Restart
+     * }
+     * ```
      */
     context(context: ActorContext)
     suspend fun onSupervise(failure: ActorFailure): SupervisorStrategy.Decision =
