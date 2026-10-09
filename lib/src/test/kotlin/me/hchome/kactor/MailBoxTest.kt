@@ -133,9 +133,7 @@ class MailBoxTest {
         }
 
         context(context: ActorContext)
-        override suspend fun onAsk(message: Any, sender: ActorRef, callback: CompletableDeferred<in Any>) {
-            callback.complete(message)
-        }
+        override suspend fun onAsk(message: Any, sender: ActorRef): Any = message
     }
 
     @Nested

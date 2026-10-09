@@ -16,6 +16,7 @@ import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorHandlerFactory
 import me.hchome.kactor.ActorHandlerRegistry
+import me.hchome.kactor.ActorInitializationException
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorRegistry
 import me.hchome.kactor.ActorSystem
@@ -36,7 +37,6 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.reflect.KClass
 import kotlin.time.Duration.Companion.minutes
-import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
 /**
@@ -88,7 +88,6 @@ internal class ActorSystemImpl(
         }
     }
 
-    @OptIn(ExperimentalUuidApi::class)
     override suspend fun <T : ActorHandler> actorOfSuspend(
         id: String?,
         parent: ActorRef,
@@ -208,6 +207,11 @@ internal class ActorSystemImpl(
             failure.sender, failure.ref, "Actor[${failure.ref}] failure",
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, failure.cause
         )
+        // A failed preStart would most likely fail again on restart: stop just that actor.
+        if (failure.cause is ActorInitializationException) {
+            processFailure(failure.ref, SupervisorStrategy.Decision.Stop)
+            return SupervisorStrategy.Decision.Stop
+        }
         // System is the root supervisor — always restarts; Escalate has nowhere to go.
         val decision = SupervisorStrategy.Decision.Restart
         when (supervisorStrategy) {
