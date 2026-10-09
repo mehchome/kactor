@@ -25,7 +25,7 @@ import me.hchome.kactor.ActorHandlerRegistry
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorRegistry
 import me.hchome.kactor.ActorSystem
-import me.hchome.kactor.ActorSystemException
+import me.hchome.kactor.exceptions.ActorSystemException
 import me.hchome.kactor.ActorSystemMessageListener
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.MessagePriority
@@ -272,6 +272,7 @@ internal class ActorSystemImpl(
                         }
                     }
                 }
+                is ActorFailed -> {}
             }
         } catch (e: Throwable) {
             notifySystem(

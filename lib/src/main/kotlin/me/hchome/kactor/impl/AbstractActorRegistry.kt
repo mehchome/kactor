@@ -7,7 +7,7 @@ import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorRegistry
 import me.hchome.kactor.ActorSystem
-import me.hchome.kactor.ActorSystemException
+import me.hchome.kactor.exceptions.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.SupervisorStrategy
@@ -142,7 +142,7 @@ abstract class AbstractActorRegistry : ActorRegistry {
     protected val CreateActor.handler: ActorHandler
         get() = actorSystem[domain].newActorHandler()
 
-    protected val ActorRef.parentJob: Job get() = if (hasParent) getRuntimeScope(parentOf()).actorJob else systemJob
+    protected val ActorRef.parentJob: Job get() = systemJob
 
     protected abstract fun createAttribute(old: Attributes): Attributes
 }

@@ -1,7 +1,7 @@
 package me.hchome.kactor.impl
 
 import me.hchome.kactor.ActorRef
-import me.hchome.kactor.ActorSystemException
+import me.hchome.kactor.exceptions.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.SystemMessage
@@ -88,7 +88,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
     override fun stopActor(ref: ActorRef) {
         if (ref.isEmpty()) return
         closeChannels(ref)
-        runtimeScopes[ref]?.cancel()
+        closeRuntimeScope(ref)
         childReferences(ref).forEach {
             actorChannels[it]?.close()
             runtimeScopes[it]?.cancel()
@@ -133,6 +133,12 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         val childRefs = childReferences(ref)
         childRefs.forEach { closeChannels(it) }
         actorChannels[ref]?.close()
+    }
+
+    private fun closeRuntimeScope(ref: ActorRef) {
+        val childRefs = childReferences(ref)
+        childRefs.forEach { closeRuntimeScope(it) }
+        runtimeScopes[ref]?.cancel()
     }
 
 
