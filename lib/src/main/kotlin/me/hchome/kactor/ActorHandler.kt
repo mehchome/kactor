@@ -55,5 +55,6 @@ interface ActorHandler {
     context(context: ActorContext)
     suspend fun supervise(
         child: ActorRef,
+        cause: FailureCause,
     ): SupervisorStrategy.Decision = SupervisorStrategy.Decision.Restart
 }

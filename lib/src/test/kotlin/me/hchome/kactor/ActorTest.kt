@@ -307,7 +307,7 @@ class ActorTest {
             SYSTEM.register<TestActor>(TestActor::class.simpleName!!)
             SYSTEM.register<TestActor2>(TestActor2::class.simpleName!!)
             SYSTEM.register<TestActor3>(TestActor3::class.simpleName!!, config = ActorConfig(
-                supervisorStrategy = SupervisorStrategy.OneForOneRetained
+                supervisorStrategy = SupervisorStrategy.OneForOne
             ))
             SYSTEM.register<TestActor4>(TestActor4::class.simpleName!!)
 

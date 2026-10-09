@@ -1,6 +1,8 @@
 package me.hchome.kactor.impl
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorRegistry
@@ -8,7 +10,7 @@ import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
-import me.hchome.kactor.Supervisor
+import me.hchome.kactor.SupervisorStrategy
 import me.hchome.kactor.SystemMessage.CreateActor
 import me.hchome.kactor.isEmpty
 import me.hchome.kactor.isNotEmpty
@@ -26,8 +28,6 @@ abstract class AbstractActorRegistry : ActorRegistry {
         private set
     protected lateinit var systemJob: Job
         private set
-    protected lateinit var systemSupervisor: Supervisor
-        private set
 
     override val all: Set<ActorRef>
         get() = actors.keys
@@ -35,11 +35,18 @@ abstract class AbstractActorRegistry : ActorRegistry {
     override fun afterInit(
         system: ActorSystem,
         systemJob: Job,
-        systemSupervisor: Supervisor
     ) {
         this.actorSystem = system
         this.systemJob = systemJob
-        this.systemSupervisor = systemSupervisor
+    }
+
+    override fun submitSupervision(
+        parentRef: ActorRef,
+        failure: ActorFailure,
+        callback: CompletableDeferred<SupervisorStrategy.Decision>,
+    ) {
+        actors[parentRef]?.submitSupervision(failure, callback)
+            ?: callback.complete(SupervisorStrategy.Decision.Stop)
     }
 
     override fun stopAllActors() {
@@ -110,7 +117,6 @@ abstract class AbstractActorRegistry : ActorRegistry {
             oldActor.domain,
             actorSystem,
             config.supervisorStrategy,
-            ref.supervisor,
             targetChannel,
             targetScope,
             newHandler,
@@ -137,9 +143,6 @@ abstract class AbstractActorRegistry : ActorRegistry {
         get() = actorSystem[domain].newActorHandler()
 
     protected val ActorRef.parentJob: Job get() = if (hasParent) getRuntimeScope(parentOf()).actorJob else systemJob
-
-    protected val ActorRef.supervisor: Supervisor
-        get() = if (parentOf().isNotEmpty()) actors[parentOf()] ?: systemSupervisor else systemSupervisor
 
     protected abstract fun createAttribute(old: Attributes): Attributes
 }

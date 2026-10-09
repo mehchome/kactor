@@ -1,79 +1,81 @@
 package me.hchome.kactor
 
 /**
- * Actors can be restarted by the supervisor strategy when they crash.
- * [OneForOne] restarts the child actor by default.
- * [AllForOne] restarts all children when one of them crashes.
- * [Escalate] escalates the failure to the supervisor
+ * Defines the scope of how a supervision decision is applied when a child actor fails.
+ * The actual [Decision] is determined by [ActorHandler.supervise] based on the failure cause.
  *
+ * [OneForOne] applies the decision only to the failing child (default).
+ * [AllForOne] applies the decision to all siblings of the failing child.
+ * [Stop] always stops the failing child, regardless of the handler's decision.
+ * [Resume] always resumes the failing child, regardless of the handler's decision.
  */
 sealed interface SupervisorStrategy {
 
-    suspend fun onFailure(failure: ActorFailure): Decision {
-        val system = failure.system
-        system.notifySystem(
+    /**
+     * Notifies the system about the failure, applies the strategy, and returns
+     * the actual decision that was carried out.
+     */
+    suspend fun handle(failure: ActorFailure, decision: Decision): Decision {
+        failure.system.notifySystem(
             failure.sender,
             failure.ref,
-            "Actor failure",
+            "Actor failure: ${failure.cause}",
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL,
-            failure.cause
         )
-        return decide(failure)
+        return apply(failure, decision)
     }
 
-    suspend fun decide(failure: ActorFailure): Decision
+    /**
+     * Applies the decision to the appropriate set of actors and returns the
+     * effective decision that was carried out.
+     */
+    suspend fun apply(failure: ActorFailure, decision: Decision): Decision
 
+    /**
+     * Applies the handler's decision only to the failing child actor.
+     */
     object OneForOne : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            val system = failure.system
-            system.processFailure(failure.ref, Decision.Recreate)
-            return Decision.Recreate
+        override suspend fun apply(failure: ActorFailure, decision: Decision): Decision {
+            failure.system.processFailure(failure.ref, decision)
+            return decision
         }
     }
 
-    object OneForOneRetained : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            val system = failure.system
-            system.processFailure(failure.ref, Decision.Restart)
-            return Decision.Restart
-        }
-    }
-
+    /**
+     * Applies the handler's decision to all sibling children of the failing actor.
+     * Falls back to [OneForOne] for root actors.
+     */
     object AllForOne : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
+        override suspend fun apply(failure: ActorFailure, decision: Decision): Decision {
             val system = failure.system
             val parentRef = failure.ref.parentOf()
             return if (parentRef.isNotEmpty()) {
-                val allChildReferences = system.childReferences(parentRef)
-                for (childRef in allChildReferences) {
-                    // send restart messages to all children
-                    system.processFailure(childRef, Decision.Restart)
+                for (childRef in system.childReferences(parentRef)) {
+                    system.processFailure(childRef, decision)
                 }
-                Decision.Restart
-            } else { // the root actor falls back to OneForOne
-                OneForOne.decide(failure)
+                decision
+            } else {
+                OneForOne.apply(failure, decision)
             }
         }
     }
 
-//    object Resume : SupervisorStrategy {
-//        override suspend fun decide(failure: ActorFailure): Decision {
-//            // Report sent, no need to do anything
-//            return Decision.Resume
-//        }
-//    }
-//
-//    object Stop : SupervisorStrategy {
-//        override suspend fun decide(failure: ActorFailure): Decision {
-//            val system = failure.system
-//            system.processFailure(failure.ref, Decision.Stop)
-//            return Decision.Stop
-//        }
-//    }
+    /**
+     * Always stops the failing child, ignoring the handler's decision.
+     */
+    object Stop : SupervisorStrategy {
+        override suspend fun apply(failure: ActorFailure, decision: Decision): Decision {
+            failure.system.processFailure(failure.ref, Decision.Stop)
+            return Decision.Stop
+        }
+    }
 
-    object Escalate : SupervisorStrategy {
-        override suspend fun decide(failure: ActorFailure): Decision {
-            return failure.supervisor.supervise(failure.ref, failure.sender, failure.message, failure.cause)
+    /**
+     * Always resumes the failing child, ignoring the handler's decision.
+     */
+    object Resume : SupervisorStrategy {
+        override suspend fun apply(failure: ActorFailure, decision: Decision): Decision {
+            return Decision.Resume
         }
     }
 

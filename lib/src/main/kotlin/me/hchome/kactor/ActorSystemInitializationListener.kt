@@ -10,6 +10,5 @@ interface ActorSystemInitializationListener {
     fun afterInit(
         system: ActorSystem,
         systemJob: Job,
-        systemSupervisor: Supervisor
     )
 }

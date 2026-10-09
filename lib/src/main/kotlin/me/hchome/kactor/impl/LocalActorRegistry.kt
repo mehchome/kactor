@@ -4,7 +4,6 @@ import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
-import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SystemMessage
 import me.hchome.kactor.UserMessage
 import me.hchome.kactor.isEmpty
@@ -57,7 +56,6 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
             return
         }
         val parentJob = ref.parentJob
-        val supervisor: Supervisor = ref.supervisor
         // new actor's environment
         val newRuntimeScope = ActorScopeImpl(parentJob, dispatcher)
         val newMailbox = createChannel(message, ref)
@@ -65,7 +63,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         val newAttributes = AttributesImpl()
         val newActor = Actor(
             ref, message.domain, actorSystem, config.supervisorStrategy,
-            supervisor, newMailbox, newRuntimeScope, newHandler, newAttributes, config.idle
+            newMailbox, newRuntimeScope, newHandler, newAttributes, config.idle
         )
         // store all actor information
         actors[ref] = newActor

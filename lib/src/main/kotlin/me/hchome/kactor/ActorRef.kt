@@ -29,6 +29,8 @@ data class ActorRef(
 
     fun childOf(id: String) = of(path.resolve(id).toString())
 
+    fun siblingOf(id: String) = path.parent?.resolve(id)?.let { of(it.toString()) } ?: of(id)
+
     fun parentOf() = path.parent?.let { of(it.toString()) } ?: EMPTY
 
     fun isChildOf(ref: ActorRef) = this.isNotEmpty() && ref.isNotEmpty() && ref.path == path.parent

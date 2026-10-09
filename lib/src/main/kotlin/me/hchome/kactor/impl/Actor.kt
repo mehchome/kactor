@@ -7,10 +7,11 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.selects.onTimeout
-import kotlinx.coroutines.selects.whileSelect
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
@@ -18,8 +19,8 @@ import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.Attributes
+import me.hchome.kactor.FailureCause
 import me.hchome.kactor.MessagePriority
-import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SupervisorStrategy
 import me.hchome.kactor.TaskInfo
 import org.slf4j.Logger
@@ -28,8 +29,10 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlin.uuid.ExperimentalUuidApi
 
-private typealias ActorHandlerScope = suspend ActorHandler.(Any, ActorRef) -> Unit
-private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, CompletableDeferred<in Any>) -> Unit
+private data class SupervisionMessage(
+    val failure: ActorFailure,
+    val deferred: CompletableDeferred<SupervisorStrategy.Decision>
+)
 
 /**
  * An actor is a business logic object that can receive messages and send messages to other actors.
@@ -40,15 +43,17 @@ class Actor internal constructor(
     val domain: String,
     private val actorSystem: ActorSystem,
     private val supervisorStrategy: SupervisorStrategy,
-    private val supervisor: Supervisor,
     private val mailbox: MailBox,
     private val runtimeScope: ActorScope,
     private val handler: ActorHandler,
     attributes: Attributes,
     private val idle: Duration,
-) : Supervisor {
+) {
 
     private val context = ActorContextImpl(this, actorSystem, runtimeScope, attributes)
+
+    // Unbounded so that a failing child never blocks when reporting to its parent.
+    private val supervisionChannel = Channel<SupervisionMessage>(Channel.UNLIMITED)
 
     private var mailBoxJob: Job? = null
 
@@ -63,6 +68,18 @@ class Actor internal constructor(
         }
     }
 
+    /**
+     * Routes a child supervision request into this actor's supervision channel
+     * so that [ActorHandler.supervise] is invoked within this actor's own coroutine context.
+     * Called by the ActorSystem — not by child actors directly.
+     */
+    internal fun submitSupervision(
+        failure: ActorFailure,
+        callback: CompletableDeferred<SupervisorStrategy.Decision>,
+    ) {
+        // Channel is UNLIMITED so trySend always succeeds.
+        supervisionChannel.trySend(SupervisionMessage(failure, callback))
+    }
 
     fun send(message: Any, sender: ActorRef, priority: MessagePriority = MessagePriority.NORMAL) {
         runtimeScope.launch {
@@ -77,7 +94,7 @@ class Actor internal constructor(
         priority: MessagePriority = MessagePriority.NORMAL
     ) {
         runtimeScope.launch {
-            mailbox.send(ActorEnvelope.SendActorEnvelope(message, sender), priority)
+            mailbox.send(ActorEnvelope.AskActorEnvelope(message, sender, callback), priority)
         }
     }
 
@@ -117,44 +134,67 @@ class Actor internal constructor(
             val receiveChannel = with(mailbox) { this@launch.selectMailbox() }
             context(context) {
                 try {
-                    handler.preStart()
-                    whileSelect {
-                        receiveChannel.onReceiveCatching { result ->
-                            val msg = result.getOrNull()
-                            if (msg == null) {
-                                false
-                            } else {
-                                val message = msg.message
-                                val sender = msg.sender
-                                try {
-                                    when (msg) {
-                                        is ActorEnvelope.SendActorEnvelope -> handler.onMessage(message, sender)
-                                        is ActorEnvelope.AskActorEnvelope<*> -> handler.onAsk(
-                                            message,
-                                            sender,
-                                            msg.callback as CompletableDeferred<in Any>
-                                        )
-                                    }
-                                    true
-                                } catch (e: Throwable) {
-                                    val decision = supervisor.supervise(ref, sender, message, e)
-                                    when (decision) {
-                                        SupervisorStrategy.Decision.Resume -> {
-                                            if (msg is ActorEnvelope.AskActorEnvelope<*>) msg.callback.completeExceptionally(
-                                                e
-                                            )
-                                            true
-                                        }
 
-                                        else -> false // let actor stop/restart
+                    handler.preStart()
+                    var running = true
+                    while (running && isActive) {
+                        // Supervision messages take priority: drain before entering select.
+                        supervisionChannel.tryReceive().getOrNull()?.let { msg ->
+                            val decision = handler.supervise(msg.failure.ref, msg.failure.cause)
+                            val actual = supervisorStrategy.handle(msg.failure, decision)
+                            msg.deferred.complete(actual)
+                            return@let
+                        }
+                        running = select {
+                            supervisionChannel.onReceiveCatching { result ->
+                                val msg = result.getOrNull() ?: return@onReceiveCatching true
+                                val decision = handler.supervise(msg.failure.ref, msg.failure.cause)
+                                val actual = supervisorStrategy.handle(msg.failure, decision)
+                                msg.deferred.complete(actual)
+                                true
+                            }
+                            receiveChannel.onReceiveCatching { result ->
+                                val msg = result.getOrNull()
+                                if (msg == null) {
+                                    false
+                                } else {
+                                    val message = msg.message
+                                    val sender = msg.sender
+                                    try {
+                                        when (msg) {
+                                            is ActorEnvelope.SendActorEnvelope -> handler.onMessage(message, sender)
+                                            is ActorEnvelope.AskActorEnvelope<*> -> handler.onAsk(
+                                                message,
+                                                sender,
+                                                msg.callback as CompletableDeferred<in Any>
+                                            )
+                                        }
+                                        true
+                                    } catch (e: Throwable) {
+                                        val failure = ActorFailure(
+                                            actorSystem, ref, sender, message, FailureCause.of(e)
+                                        )
+                                        val decision = try {
+                                            actorSystem.reportFailure(ref, failure)
+                                        } catch (_: Exception) {
+                                            SupervisorStrategy.Decision.Stop
+                                        }
+                                        when (decision) {
+                                            SupervisorStrategy.Decision.Resume -> {
+                                                if (msg is ActorEnvelope.AskActorEnvelope<*>) {
+                                                    msg.callback.completeExceptionally(e)
+                                                }
+                                                true
+                                            }
+                                            else -> false
+                                        }
                                     }
                                 }
                             }
-                        }
-                        onTimeout(idle) {
-                            // actor idles, no message received
-                            handler.onIdle()
-                            true
+                            onTimeout(idle) {
+                                handler.onIdle()
+                                true
+                            }
                         }
                     }
                 } catch (e: CancellationException) {
@@ -167,15 +207,6 @@ class Actor internal constructor(
                 }
             }
         }
-    }
-
-    override suspend fun supervise(
-        child: ActorRef,
-        sender: ActorRef,
-        message: Any,
-        cause: Throwable
-    ): SupervisorStrategy.Decision {
-        return supervisorStrategy.onFailure(ActorFailure(actorSystem, child, sender, message, cause, supervisor))
     }
 
     companion object {

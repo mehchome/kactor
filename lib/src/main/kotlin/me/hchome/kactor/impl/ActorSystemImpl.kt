@@ -29,11 +29,11 @@ import me.hchome.kactor.ActorSystemException
 import me.hchome.kactor.ActorSystemMessageListener
 import me.hchome.kactor.ActorSystemNotificationMessage
 import me.hchome.kactor.MessagePriority
-import me.hchome.kactor.Supervisor
 import me.hchome.kactor.SupervisorStrategy
 import me.hchome.kactor.SystemMessage
 import me.hchome.kactor.SystemMessage.*
 import me.hchome.kactor.UserMessage
+import me.hchome.kactor.isNotEmpty
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import kotlin.concurrent.atomics.AtomicBoolean
@@ -53,7 +53,6 @@ internal class ActorSystemImpl(
     private val supervisorStrategy: SupervisorStrategy,
     private val actorRegistry: ActorRegistry
 ) : ActorSystem,
-    Supervisor,
     ActorHandlerRegistry by ActorHandlerRegistryImpl(Dispatchers.Default, handlerFactory) {
     private val systemJob = SupervisorJob()
     private val systemScope = CoroutineScope(systemJob + Dispatchers.Default)
@@ -69,7 +68,7 @@ internal class ActorSystemImpl(
     private val runningFlag = AtomicBoolean(false)
 
     init {
-        actorRegistry.afterInit(this, systemJob, this)
+        actorRegistry.afterInit(this, systemJob)
     }
 
 
@@ -91,6 +90,19 @@ internal class ActorSystemImpl(
             SupervisorStrategy.Decision.Recreate -> systemMailbox.send(RestartActor(ref, true))
             SupervisorStrategy.Decision.Restart -> systemMailbox.send(RestartActor(ref, false))
         }
+    }
+
+    override suspend fun reportFailure(
+        childRef: ActorRef,
+        failure: ActorFailure
+    ): SupervisorStrategy.Decision {
+        val callback = CompletableDeferred<SupervisorStrategy.Decision>()
+        try {
+            systemMailbox.send(SupervisionRequest(childRef, failure, callback))
+        } catch (_: Exception) {
+            return SupervisorStrategy.Decision.Stop
+        }
+        return callback.await()
     }
 
     @OptIn(ExperimentalCoroutinesApi::class, ExperimentalUuidApi::class)
@@ -240,38 +252,36 @@ internal class ActorSystemImpl(
         }
     }
 
-    override suspend fun supervise(
-        child: ActorRef,
-        sender: ActorRef,
-        message: Any,
-        cause: Throwable
-    ): SupervisorStrategy.Decision {
-        return when (supervisorStrategy) {
-            is SupervisorStrategy.AllForOne, is SupervisorStrategy.Escalate -> { // System cannot do crazy thing just fall back to OneForOne
-                SupervisorStrategy.OneForOne.decide(ActorFailure(this, child, sender, message, cause, this))
+    private fun handleSystemMessage(message: SystemMessage) {
+        try {
+            when (message) {
+                is CreateActor -> actorRegistry.createActor(message)
+                is StopActor -> actorRegistry.stopActor(message.ref)
+                is RestartActor -> actorRegistry.restartActor(message.ref, message.recreate)
+                is SupervisionRequest -> {
+                    val parentRef = message.childRef.parentOf()
+                    if (parentRef.isNotEmpty()) {
+                        actorRegistry.submitSupervision(parentRef, message.failure, message.callback)
+                    } else {
+                        // Root actor with no parent: system acts as supervisor.
+                        systemScope.launch {
+                            val actual = supervisorStrategy.handle(
+                                message.failure, SupervisorStrategy.Decision.Restart
+                            )
+                            message.callback.complete(actual)
+                        }
+                    }
+                }
             }
-
-            is SupervisorStrategy.Resume -> SupervisorStrategy.Decision.Resume
-            else -> {
-                supervisorStrategy.onFailure(ActorFailure(this, child, sender, message, cause, this))
-            }
+        } catch (e: Throwable) {
+            notifySystem(
+                ActorRef.EMPTY,
+                ActorRef.EMPTY,
+                e.message ?: "Actor system exception",
+                ActorSystemNotificationMessage.NotificationType.SYSTEM_ERROR,
+                e
+            )
         }
-    }
-
-    private fun handleSystemMessage(message: SystemMessage): Unit = try {
-        when (message) {
-            is CreateActor -> actorRegistry.createActor(message)
-            is StopActor -> actorRegistry.stopActor(message.ref)
-            is RestartActor -> actorRegistry.restartActor(message.ref, message.recreate)
-        }
-    } catch (e: Throwable) {
-        notifySystem(
-            ActorRef.EMPTY,
-            ActorRef.EMPTY,
-            e.message ?: "Actor system exception",
-            ActorSystemNotificationMessage.NotificationType.SYSTEM_ERROR,
-            e
-        )
     }
 
     private suspend fun handleUserMessage(message: UserMessage): Unit = when (message) {

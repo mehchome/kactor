@@ -1,5 +1,6 @@
 package me.hchome.kactor
 
+import kotlinx.coroutines.CompletableDeferred
 import me.hchome.kactor.SystemMessage.CreateActor
 
 /**
@@ -49,6 +50,19 @@ interface ActorRegistry: ActorSystemInitializationListener {
      * stop all actors
      */
     fun stopAllActors()
+
+    /**
+     * Routes a supervision request from a failing child to its parent actor's
+     * supervision channel. Completes [callback] with [SupervisorStrategy.Decision.Stop]
+     * if the parent is not found.
+     */
+    fun submitSupervision(
+        parentRef: ActorRef,
+        failure: ActorFailure,
+        callback: CompletableDeferred<SupervisorStrategy.Decision>,
+    ) {
+        callback.complete(SupervisorStrategy.Decision.Stop)
+    }
 
     /**
      * tell actor

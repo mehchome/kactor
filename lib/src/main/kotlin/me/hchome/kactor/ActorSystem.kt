@@ -91,6 +91,13 @@ interface ActorSystem : ActorHandlerRegistry {
     suspend fun processFailure(ref: ActorRef, decision: SupervisorStrategy.Decision)
 
     /**
+     * Called by a failing child actor to report its failure to the ActorSystem,
+     * which routes the [ActorFailure] to the appropriate supervisor and returns
+     * the supervision decision.
+     */
+    suspend fun reportFailure(childRef: ActorRef, failure: ActorFailure): SupervisorStrategy.Decision
+
+    /**
      * shutdown actor system gracefully
      */
     fun shutdownGracefully()

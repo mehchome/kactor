@@ -1,7 +1,6 @@
 package me.hchome.kactor
 
 import kotlinx.coroutines.CompletableDeferred
-import me.hchome.kactor.MessagePriority
 
 /**
  * User message send
@@ -21,4 +20,6 @@ sealed interface UserMessage {
         val priority: MessagePriority,
         val callback: CompletableDeferred<out Any>
     ): UserMessage
+
+
 }

@@ -8,6 +8,16 @@ import kotlinx.coroutines.CompletableDeferred
 sealed interface SystemMessage {
 
     /**
+     * Routed by the ActorSystem to the parent actor when a child fails.
+     * The parent's handler decides the supervision decision via [ActorHandler.supervise].
+     */
+    data class SupervisionRequest(
+        val childRef: ActorRef,
+        val failure: ActorFailure,
+        val callback: CompletableDeferred<SupervisorStrategy.Decision>,
+    ) : SystemMessage
+
+    /**
      * messages to create an actor
      */
     data class CreateActor(
