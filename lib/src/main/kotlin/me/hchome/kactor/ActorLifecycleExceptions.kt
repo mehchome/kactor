@@ -7,8 +7,11 @@ package me.hchome.kactor
  * since a restart would usually just fail again.
  */
 class ActorInitializationException(val ref: ActorRef, cause: Throwable) :
-    RuntimeException("Actor[$ref] failed to start: ${cause.message}", cause) {
+    ActorException(CODE, "Actor[$ref] failed to start: ${cause.message}", cause) {
     companion object {
+        /** [ActorException.code] of an initialization failure */
+        const val CODE = "ACTOR_INIT_FAILED"
+
         /** [ActorFailure.message] of an initialization failure */
         const val PRE_START = "preStart"
     }

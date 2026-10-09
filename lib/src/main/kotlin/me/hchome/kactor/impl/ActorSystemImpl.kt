@@ -204,7 +204,7 @@ internal class ActorSystemImpl(
 
     override suspend fun supervise(failure: ActorFailure): SupervisorStrategy.Decision {
         notifySystem(
-            failure.sender, failure.ref, "Actor[${failure.ref}] failure",
+            failure.sender, failure.ref, "Actor[${failure.ref}] failure [${failure.code}]",
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, failure.cause
         )
         // A failed preStart would most likely fail again on restart: stop just that actor.
