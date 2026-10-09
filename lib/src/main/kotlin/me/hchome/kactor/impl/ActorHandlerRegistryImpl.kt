@@ -16,19 +16,36 @@ internal class ActorHandlerRegistryImpl(
     private val defaultFactory: ActorHandlerFactory = DefaultActorHandlerFactory
 ) : ActorHandlerRegistry {
 
-    private val registry: MutableMap<String, ActorHandlerConfigHolder> =
-        ConcurrentHashMap<String, ActorHandlerConfigHolder>()
+    private val registry = ConcurrentHashMap<String, ActorHandlerConfigHolder>()
 
+    // reverse index for findName, which runs on every spawn by class
+    private val domainsByClass = ConcurrentHashMap<KClass<out ActorHandler>, String>()
+
+    // registration is rare; serialise it so both maps stay consistent
+    @Synchronized
     override fun register(
         domain: String,
         dispatcher: CoroutineDispatcher?,
         config: ActorConfig,
         factory: ActorHandlerFactory?,
         kClass: KClass<out ActorHandler>
-    )  {
-        val dispatcher = dispatcher ?: defaultDispatcher
+    ) {
         val factory = factory ?: defaultFactory
-        registry[domain] = ActorHandlerConfigHolder(domain, dispatcher, config, factory, kClass)
+        require(factory !== DefaultActorHandlerFactory || kClass.objectInstance == null) {
+            "$kClass is an object: every actor of '$domain' would share one handler instance, even across " +
+                "restarts. Use a class, or register a factory that deliberately returns the singleton."
+        }
+        domainsByClass[kClass]?.let { existing ->
+            require(existing == domain) {
+                "$kClass is already registered as '$existing'. Actors are spawned by handler class, " +
+                    "so a class can be registered under only one domain."
+            }
+        }
+        val holder = ActorHandlerConfigHolder(domain, dispatcher ?: defaultDispatcher, config, factory, kClass)
+        registry.put(domain, holder)?.let { replaced ->
+            if (replaced.kClass != kClass) domainsByClass.remove(replaced.kClass, domain)
+        }
+        domainsByClass[kClass] = domain
     }
 
     override fun get(domain: String): ActorHandlerConfigHolder {
@@ -39,7 +56,5 @@ internal class ActorHandlerRegistryImpl(
         return registry.containsKey(domain)
     }
 
-    override fun  findName(kClass: KClass<out ActorHandler>): String? {
-        return registry.filter { it.value.kClass == kClass }.keys.firstOrNull()
-    }
+    override fun findName(kClass: KClass<out ActorHandler>): String? = domainsByClass[kClass]
 }

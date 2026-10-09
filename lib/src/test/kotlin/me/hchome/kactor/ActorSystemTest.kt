@@ -29,9 +29,7 @@ class ActorSystemTest {
     // Responds to any ask with "pong"
     class PingActor : ActorHandler {
         context(context: ActorContext)
-        override suspend fun onAsk(message: Any, sender: ActorRef, callback: CompletableDeferred<in Any>) {
-            callback.complete("pong")
-        }
+        override suspend fun onAsk(message: Any, sender: ActorRef): Any = "pong"
     }
 
     // Throws on "fail"; completes CompletableDeferred<Unit> on any other message

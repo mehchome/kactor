@@ -10,4 +10,11 @@ data class ActorFailure(
     val message: Any,
     val cause: Throwable,
     val reason: String = cause.message ?: "Unknown failure"
-)
+) {
+    /** [ActorException.code] of [cause], or [UNKNOWN_CODE] when [cause] is not an [ActorException] */
+    val code: String get() = (cause as? ActorException)?.code ?: UNKNOWN_CODE
+
+    companion object {
+        const val UNKNOWN_CODE = "ACTOR_UNKNOWN_ERROR"
+    }
+}

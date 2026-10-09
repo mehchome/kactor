@@ -2,54 +2,61 @@ name: Release
 
 on:
   push:
-    branches: [master, main, development]
+    branches: [master, development]
+
+concurrency:
+  group: release # versions are computed from tags, so releases must not overlap
+  cancel-in-progress: false
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
-    timeout-minutes: 20
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
+          distribution: temurin
           java-version: '21'
-          distribution: 'corretto'
-          cache: gradle
-          cache-dependency-path: '**/*.gradle*'
 
-      - name: Test
-        run: |
-          chmod a+x ./gradlew
-          ./gradlew test --no-daemon
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_S3_BUCKET_URL: ${{ secrets.AWS_S3_BUCKET_URL }}
+      - uses: gradle/actions/setup-gradle@v5
 
-  # Computes the next version based on branch and commit messages.
+      - name: Build and test
+        run: ./gradlew build :dokkaGenerate # :dokkaGenerate aggregates the API docs of all modules
+
+      - name: Upload API docs
+        uses: actions/upload-artifact@v5
+        with:
+          name: api-docs
+          path: build/dokka/html/
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: test-reports
+          path: '**/build/reports/tests/'
+
+  # Computes the next version based on branch and commit messages (Conventional Commits).
   #
-  # development : keyword commit  →  X.Y.Z-dev.N   (only feat/fix/BREAKING CHANGE triggers)
-  # main/master : every push      →  X.Y.Z          (promotes latest dev tag, final release)
+  # development : feat/fix/BREAKING CHANGE commit  →  X.Y.Z-dev.N  (snapshots repository)
+  # master      : every push                       →  X.Y.Z        (promotes the latest dev version)
+  #
+  # A jar carries its version, so a promotion rebuilds the pushed commit.
   version:
     needs: build-and-test
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     outputs:
       should_release: ${{ steps.compute.outputs.should_release }}
-      version:        ${{ steps.compute.outputs.version }}
-      version_tag:    ${{ steps.compute.outputs.version_tag }}
-      prerelease:     ${{ steps.compute.outputs.prerelease }}
-      release_path:   ${{ steps.compute.outputs.release_path }}
-
+      version: ${{ steps.compute.outputs.version }}
+      prerelease: ${{ steps.compute.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -59,166 +66,165 @@ jobs:
           set -euo pipefail
           BRANCH="${GITHUB_REF#refs/heads/}"
 
+          release() {
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "version=$1"          >> "$GITHUB_OUTPUT"
+            echo "prerelease=$2"       >> "$GITHUB_OUTPUT"
+            echo "Releasing $1"
+          }
+          skip() {
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "$1"
+          }
+
           case "$BRANCH" in
 
             # ── development ────────────────────────────────────────────────
-            # Only release when the latest commit carries a semantic keyword.
-            # Version bump is derived from ALL commits since the last release tag.
+            # Only release when a commit since the last dev tag carries a semantic keyword.
+            # The bump level is derived from ALL commits since the last release tag.
             development)
-              LAST=$(git tag -l --sort=-version:refname | grep -vE '\-(dev|rc)\.' | head -1)
-              [ -z "$LAST" ] && LAST="0.0.0"
-
+              LAST=$(git tag -l --sort=-version:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
               LAST_DEV=$(git tag -l '*-dev.*' --sort=-version:refname | head -1)
 
-              if [ -n "$LAST_DEV" ]; then
-                TRIGGER_COMMITS=$(git log "${LAST_DEV}..HEAD" --pretty=%s)
-              elif [ "$LAST" != "0.0.0" ]; then
-                TRIGGER_COMMITS=$(git log "${LAST}..HEAD" --pretty=%s)
-              else
-                TRIGGER_COMMITS=$(git log --pretty=%s)
-              fi
+              # Conventional Commits: the type comes from the subject line only, and
+              # BREAKING CHANGE only counts as a footer ("BREAKING CHANGE: ..." at a line start).
+              # Output is captured before grepping: with pipefail, `git log | grep -q` can
+              # fail on SIGPIPE when grep exits early.
+              is_breaking() {
+                local subjects bodies
+                subjects=$(git log --format=%s ${1:+"$1"})
+                bodies=$(git log --format=%b ${1:+"$1"})
+                grep -qE '^[a-z]+(\([^)]+\))?!:' <<< "$subjects" || grep -qE '^BREAKING[ -]CHANGE:' <<< "$bodies"
+              }
+              has_type() {
+                local subjects
+                subjects=$(git log --format=%s ${2:+"$2"})
+                grep -qE "^($1)(\([^)]+\))?!?:" <<< "$subjects"
+              }
 
-              if ! echo "$TRIGGER_COMMITS" | grep -qE '^(feat|fix)(\([^)]+\))?(!)?:|BREAKING CHANGE'; then
-                echo "should_release=false" >> $GITHUB_OUTPUT
+              if [ -n "$LAST_DEV" ]; then
+                TRIGGER_RANGE="${LAST_DEV}..HEAD"
+              elif [ -n "$LAST" ]; then
+                TRIGGER_RANGE="${LAST}..HEAD"
+              else
+                TRIGGER_RANGE=""
+              fi
+              if ! has_type 'feat|fix' "$TRIGGER_RANGE" && ! is_breaking "$TRIGGER_RANGE"; then
+                skip "No feat/fix/breaking commit since the last dev release."
                 exit 0
               fi
 
-              MAJOR=$(echo "$LAST" | cut -d. -f1)
-              MINOR=$(echo "$LAST" | cut -d. -f2)
-              PATCH=$(echo "$LAST" | cut -d. -f3)
-
-              if [ "$LAST" = "0.0.0" ]; then
-                COMMITS=$(git log --pretty=%s)
+              if [ -n "$LAST" ]; then
+                RANGE="${LAST}..HEAD"
               else
-                COMMITS=$(git log "${LAST}..HEAD" --pretty=%s)
+                RANGE=""
+                LAST="0.0.0"
               fi
+              IFS=. read -r MAJOR MINOR PATCH <<< "$LAST"
 
-              if echo "$COMMITS" | grep -qE '^.+!:|BREAKING CHANGE'; then
+              if is_breaking "$RANGE"; then
                 BASE="$((MAJOR+1)).0.0"
-              elif echo "$COMMITS" | grep -qE '^feat(\([^)]+\))?:'; then
+              elif has_type feat "$RANGE"; then
                 BASE="${MAJOR}.$((MINOR+1)).0"
               else
                 BASE="${MAJOR}.${MINOR}.$((PATCH+1))"
               fi
 
-              DEV_N=$(git tag -l "${BASE}-dev.*" | wc -l | tr -d ' ')
-              VERSION="${BASE}-dev.$((DEV_N+1))"
-
-              echo "should_release=true"    >> $GITHUB_OUTPUT
-              echo "version=${VERSION}"     >> $GITHUB_OUTPUT
-              echo "version_tag=${VERSION}" >> $GITHUB_OUTPUT
-              echo "prerelease=true"        >> $GITHUB_OUTPUT
-              echo "release_path=snapshots" >> $GITHUB_OUTPUT
+              # The highest number rather than a count: old dev tags get cleaned up, and a
+              # published version must never be reused for different code.
+              DEV_N=$(git tag -l "${BASE}-dev.*" | sed 's/.*-dev\.//' | sort -n | tail -1)
+              release "${BASE}-dev.$(( ${DEV_N:-0} + 1 ))" true
               ;;
 
-            # ── main / master ──────────────────────────────────────────────
-            # Promote the latest dev tag to a final release.
-            main|master)
+            # ── master ─────────────────────────────────────────────────────
+            # Promote the latest dev version to a final release. Released versions are
+            # immutable, so a version that already has its final tag is not released again.
+            master)
               LATEST_DEV=$(git tag -l '*-dev.*' --sort=-version:refname | head -1)
               if [ -z "$LATEST_DEV" ]; then
-                echo "No dev tag found — push to development first." >&2
-                echo "should_release=false" >> $GITHUB_OUTPUT
+                skip "No dev tag found — push to development first."
                 exit 0
               fi
               VERSION="${LATEST_DEV%-dev.*}"
-
-              echo "should_release=true"    >> $GITHUB_OUTPUT
-              echo "version=${VERSION}"     >> $GITHUB_OUTPUT
-              echo "version_tag=${VERSION}" >> $GITHUB_OUTPUT
-              echo "prerelease=false"       >> $GITHUB_OUTPUT
-              echo "release_path=releases"  >> $GITHUB_OUTPUT
+              if git tag -l "${VERSION}" | grep -q .; then
+                skip "${VERSION} is already released — push to development first."
+                exit 0
+              fi
+              if ! git merge-base --is-ancestor "$LATEST_DEV" HEAD; then
+                skip "${LATEST_DEV} is not merged into master yet."
+                exit 0
+              fi
+              release "${VERSION}" false
               ;;
 
             *)
-              echo "should_release=false" >> $GITHUB_OUTPUT
+              skip "Branch ${BRANCH} does not release."
               ;;
           esac
 
-  release:
+  # Publish before tagging, so a failed publish leaves no tag without artifacts.
+  publish:
     needs: version
     if: needs.version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Publish
+        run: ./gradlew publish -x test
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+          # Repository URLs are optional repository variables; unset means the build's defaults.
+          MAVEN_RELEASES_URL: ${{ vars.MAVEN_RELEASES_URL }}
+          MAVEN_SNAPSHOTS_URL: ${{ vars.MAVEN_SNAPSHOTS_URL }}
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+
+  release:
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-
-      - name: Delete conflicting tag and release
-        run: |
-          git tag -d ${{ needs.version.outputs.version_tag }} 2>/dev/null || true
-          git push origin :refs/tags/${{ needs.version.outputs.version_tag }} 2>/dev/null || true
-          gh release delete ${{ needs.version.outputs.version_tag }} -y 2>/dev/null || true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.version.outputs.version_tag }}
-          name: Release ${{ needs.version.outputs.version_tag }}
+          tag_name: ${{ needs.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Release ${{ needs.version.outputs.version }}
           prerelease: ${{ needs.version.outputs.prerelease }}
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Clean up superseded tags
         run: |
           delete_tag() {
-            local tag=$1
-            git push origin :refs/tags/$tag 2>/dev/null || true
-            gh release delete $tag -y 2>/dev/null || true
-            git tag -d $tag 2>/dev/null || true
+            gh release delete "$1" -y --cleanup-tag 2>/dev/null || git push origin ":refs/tags/$1" 2>/dev/null || true
           }
 
           BRANCH="${GITHUB_REF#refs/heads/}"
-          VERSION="${{ needs.version.outputs.version }}"
-
           case "$BRANCH" in
             development)
-              # Keep only the 5 newest dev tags; delete the rest
-              git tag -l '*-dev.*' --sort=-version:refname | tail -n +6 | while read tag; do
-                delete_tag "$tag"
-              done
+              # Keep only the 5 newest dev tags
+              git tag -l '*-dev.*' --sort=-version:refname | tail -n +6 | while read -r tag; do delete_tag "$tag"; done
               ;;
-            main|master)
-              # Dev tags for this base version are superseded by the final release
-              BASE="$VERSION"
-              git tag -l "${BASE}-dev.*" | while read tag; do
-                delete_tag "$tag"
-              done
+            master)
+              # Dev tags of this version are superseded by the final release
+              git tag -l "${VERSION}-dev.*" | while read -r tag; do delete_tag "$tag"; done
               ;;
           esac
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish:
-    needs: [version, release]
-    if: needs.version.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'corretto'
-          cache: gradle
-          cache-dependency-path: '**/*.gradle*'
-
-      - name: Build and publish
-        run: |
-          chmod a+x ./gradlew
-          ./gradlew build publish -x test --no-daemon
-        env:
-          MY_VERSION: ${{ needs.version.outputs.version_tag }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_S3_BUCKET_URL: ${{ secrets.AWS_S3_BUCKET_URL }}
-          RELEASE_PATH: ${{ needs.version.outputs.release_path }}

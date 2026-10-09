@@ -1,4 +1,5 @@
 @file:Suppress("unused")
+
 package me.hchome.kactor.impl
 
 import kotlinx.coroutines.CompletableDeferred
@@ -17,9 +18,11 @@ import me.hchome.kactor.ActorContext
 import me.hchome.kactor.BehaviorBlock
 import me.hchome.kactor.ActorFailure
 import me.hchome.kactor.ActorHandler
+import me.hchome.kactor.ActorInitializationException
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemNotificationMessage
+import me.hchome.kactor.AskNotHandledException
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.MessagePriority
 import me.hchome.kactor.Props
@@ -241,7 +244,7 @@ class Actor internal constructor(
             context(context) {
                 val idleEnabled = idle.isFinite()
                 try {
-                    handler.preStart()
+                    if (!startHandler()) return@launch
                     while (true) {
                         // tryReceive never checks cancellation, so a busy mailbox must do it here.
                         ensureActive()
@@ -296,23 +299,6 @@ class Actor internal constructor(
     }
 
     /**
-     * Dispatches a single [ActorEnvelope] to the appropriate handler method.
-     *
-     * Returns `true` to continue the mailbox loop, or `false` to signal that the loop
-     * should exit (when the supervisor decides anything other than [SupervisorStrategy.Decision.Resume]).
-     *
-     * On exception:
-     * 1. [ActorHandler.onException] is called on this actor's handler to produce an [ActorFailure].
-     *    If `onException` itself throws, a default [ActorFailure] is constructed from the original cause.
-     * 2. The [ActorFailure] is forwarded to the supervisor via [supervisor].
-     * 3. [SupervisorStrategy.Decision.Resume] → loop continues (`true`); the ask callback, if
-     *    present, is completed exceptionally.
-     * 4. Any other decision → loop exits (`false`); the registry will restart or stop this actor.
-     *
-     * @param msg the envelope dequeued from the mailbox
-     * @return `true` to keep the loop running; `false` to exit
-     */
-    /**
      * Handles an envelope from the control channel: supervision requests are handled
      * inline, anything else goes through [dispatch].
      */
@@ -322,6 +308,46 @@ class Actor internal constructor(
         else -> dispatch(msg)
     }
 
+    /**
+     * Runs [ActorHandler.preStart]. If it throws, the failure is reported to [supervisor] with an
+     * [ActorInitializationException] cause; previously it escaped the mailbox coroutine unsupervised,
+     * leaving a dead actor registered.
+     *
+     * @return `true` to start processing messages (preStart succeeded, or the decision is Resume)
+     */
+    context(ctx: ActorContext)
+    private suspend fun startHandler(): Boolean = try {
+        handler.preStart()
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        val failure = ActorFailure(
+            ref, ActorRef.EMPTY, ActorInitializationException.PRE_START, ActorInitializationException(ref, e)
+        )
+        supervisor.supervise(failure) == SupervisorStrategy.Decision.Resume
+    }
+
+    /**
+     * Dispatches a single [ActorEnvelope] to the appropriate handler method.
+     *
+     * Returns `true` to continue the mailbox loop, or `false` to signal that the loop
+     * should exit (when the supervisor decides anything other than [SupervisorStrategy.Decision.Resume]).
+     *
+     * On exception:
+     * 1. A pending ask is failed with the exception right away, whatever the decision.
+     * 2. [ActorHandler.onException] is called on this actor's handler to produce an [ActorFailure].
+     *    If `onException` itself throws, a default [ActorFailure] is constructed from the original cause.
+     * 3. The [ActorFailure] is forwarded to the supervisor via [supervisor].
+     * 4. [SupervisorStrategy.Decision.Resume] → loop continues (`true`); any other decision → loop
+     *    exits (`false`) and the registry restarts or stops this actor.
+     *
+     * Not failures: [CancellationException] (the actor is being stopped or restarted) is rethrown,
+     * and [AskNotHandledException] from this handler only fails the ask.
+     *
+     * @param msg the envelope dequeued from the mailbox
+     * @return `true` to keep the loop running; `false` to exit
+     */
     @Suppress("UNCHECKED_CAST")
     context(ctx: ActorContext)
     private suspend fun dispatch(msg: ActorEnvelope): Boolean {
@@ -334,26 +360,44 @@ class Actor internal constructor(
                     if (behavior != null) handler.behavior(ctx, message, sender)
                     else handler.onMessage(message, sender)
                 }
-                is ActorEnvelope.AskActorEnvelope<*> -> handler.onAsk(
-                    message, sender, msg.callback as CompletableDeferred<in Any>
-                )
+
+                // the callback stays internal: the handler only returns the reply
+                is ActorEnvelope.AskActorEnvelope<*> ->
+                    (msg.callback as CompletableDeferred<in Any>).complete(handler.onAsk(message, sender))
+
                 is ActorEnvelope.SuperviseEnvelope -> {} // handled separately in startActor
             }
             true
+        } catch (e: CancellationException) {
+            // the actor is being stopped or restarted: not a handler failure
+            throw e
+        } catch (e: AskNotHandledException) {
+            // this handler simply doesn't answer asks: fail the ask, keep the actor running.
+            // One from a nested ask to another actor is a real failure of this handler.
+            if (e.ref != ref) return handlerFailed(msg, e)
+            (msg as? ActorEnvelope.AskActorEnvelope<*>)?.callback?.completeExceptionally(e)
+            true
         } catch (e: Throwable) {
-            val failure = try {
-                handler.onException(message, sender, e)
-            } catch (_: Throwable) {
-                ActorFailure(ref, sender, message, e)
-            }
-            when (supervisor.supervise(failure)) {
-                SupervisorStrategy.Decision.Resume -> {
-                    if (msg is ActorEnvelope.AskActorEnvelope<*>) msg.callback.completeExceptionally(e)
-                    true
-                }
-                else -> false
-            }
+            handlerFailed(msg, e)
         }
+    }
+
+    /** A handler threw [e] while processing [msg]: fail its ask and let the supervisor decide. */
+    context(ctx: ActorContext)
+    private suspend fun handlerFailed(msg: ActorEnvelope, e: Throwable): Boolean {
+        val message = msg.message
+        val sender = msg.sender
+        // Fail the ask right away, whatever the decision: the envelope is consumed either way,
+        // and the asker should not wait for supervision.
+        if (msg is ActorEnvelope.AskActorEnvelope<*>) msg.callback.completeExceptionally(e)
+        val failure = try {
+            handler.onException(message, sender, e)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Throwable) {
+            ActorFailure(ref, sender, message, e)
+        }
+        return supervisor.supervise(failure) == SupervisorStrategy.Decision.Resume
     }
 
     /**
@@ -383,7 +427,7 @@ class Actor internal constructor(
     private suspend fun handleSupervision(envelope: ActorEnvelope.SuperviseEnvelope): Boolean {
         val failure = envelope.failure
         actorSystem.notifySystem(
-            failure.sender, failure.ref, "Actor[${failure.ref}] failure",
+            failure.sender, failure.ref, "Actor[${failure.ref}] failure [${failure.code}]",
             ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, failure.cause
         )
         try {

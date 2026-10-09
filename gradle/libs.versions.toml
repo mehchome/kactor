@@ -1,5 +1,5 @@
 [versions]
-kotlin = "2.3.20"
+kotlin = "2.4.21"
 coroutines = "1.10.1"
 slf4j = "2.0.17"
 logback = "1.5.21"
@@ -10,6 +10,10 @@ coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 logback = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+# Gradle plugins as libraries, for the convention plugins in build-logic
+kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+dokka-gradle-plugin = { module = "org.jetbrains.dokka:dokka-gradle-plugin", version.ref = "dokka" }
 
 [plugins]
 jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
