@@ -1,7 +1,5 @@
 package me.hchome.kactor
 
-import kotlinx.coroutines.CompletableDeferred
-
 /**
  * Actor handler - business logic for an actor
  */
@@ -12,11 +10,15 @@ interface ActorHandler {
         get() = context.ref
 
     /**
-     * Ask handler
+     * Ask handler: return the reply. The framework completes the ask with the returned value, or
+     * fails it with a thrown exception (which is also supervised like any handler failure), so an
+     * ask can never be left unanswered.
+     *
+     * The default throws [AskNotHandledException], which fails the ask without supervising the actor.
      */
     context(context: ActorContext)
-    suspend fun onAsk(message: Any, sender: ActorRef, callback: CompletableDeferred<in Any>) {
-    }
+    suspend fun onAsk(message: Any, sender: ActorRef): Any =
+        throw AskNotHandledException(context.ref, this::class.qualifiedName)
 
     /**
      * Receive handler
@@ -33,7 +35,9 @@ interface ActorHandler {
     }
 
     /**
-     * Before the actor receiving and processing messages
+     * Before the actor receiving and processing messages. If it throws, the failure is reported to
+     * the supervisor as an [ActorInitializationException]; the actor only starts processing messages
+     * if the decision is [SupervisorStrategy.Decision.Resume].
      */
     context(context: ActorContext)
     suspend fun preStart() {
@@ -66,9 +70,12 @@ interface ActorHandler {
      * Return the [SupervisorStrategy.Decision] that should be applied.
      * The scope (OneForOne vs AllForOne) is determined by the supervisor's [ActorConfig].
      *
-     * The default decision is [SupervisorStrategy.Decision.Restart].
+     * The default decision is [SupervisorStrategy.Decision.Restart], except for a failed
+     * [preStart] ([ActorInitializationException]), which is [SupervisorStrategy.Decision.Stop]:
+     * restarting would usually fail again, in a loop.
      */
     context(context: ActorContext)
     suspend fun onSupervise(failure: ActorFailure): SupervisorStrategy.Decision =
-        SupervisorStrategy.Decision.Restart
+        if (failure.cause is ActorInitializationException) SupervisorStrategy.Decision.Stop
+        else SupervisorStrategy.Decision.Restart
 }
