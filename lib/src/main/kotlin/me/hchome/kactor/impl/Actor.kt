@@ -4,6 +4,7 @@ package me.hchome.kactor.impl
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -362,8 +363,14 @@ class Actor internal constructor(
                 }
 
                 // the callback stays internal: the handler only returns the reply
-                is ActorEnvelope.AskActorEnvelope<*> ->
-                    (msg.callback as CompletableDeferred<in Any>).complete(handler.onAsk(message, sender))
+                is ActorEnvelope.AskActorEnvelope<*> -> {
+                    val callback = msg.callback as CompletableDeferred<in Any>
+                    when (val reply = handler.onAsk(message, sender)) {
+                        // deferred reply: answer once it completes, without holding the mailbox
+                        is Deferred<*> -> reply.invokeOnCompletion { cause -> callback.completeFrom(reply, cause) }
+                        else -> callback.complete(reply)
+                    }
+                }
 
                 is ActorEnvelope.SuperviseEnvelope -> {} // handled separately in startActor
             }
@@ -380,6 +387,21 @@ class Actor internal constructor(
         } catch (e: Throwable) {
             handlerFailed(msg, e)
         }
+    }
+
+    /**
+     * Completes this ask callback from a deferred reply that has just completed, with [cause]
+     * as given by [Deferred.invokeOnCompletion]. A `null` reply fails the ask.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun CompletableDeferred<in Any>.completeFrom(reply: Deferred<*>, cause: Throwable?) {
+        if (cause != null) {
+            completeExceptionally(cause)
+            return
+        }
+        val value = reply.getCompleted()
+        if (value != null) complete(value)
+        else completeExceptionally(IllegalStateException("Actor[$ref] deferred ask reply completed with null"))
     }
 
     /** A handler threw [e] while processing [msg]: fail its ask and let the supervisor decide. */
