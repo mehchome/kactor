@@ -14,6 +14,12 @@ interface ActorHandler {
      * fails it with a thrown exception (which is also supervised like any handler failure), so an
      * ask can never be left unanswered.
      *
+     * Returning a [kotlinx.coroutines.Deferred] answers the ask asynchronously: the mailbox moves on
+     * to the next message right away, and the ask completes with the deferred's value once it is
+     * available (e.g. forwarding with `context.ask(...)`). A failed or cancelled deferred only fails
+     * the ask; it is not supervised, and a `null` value fails it too. The deferred runs concurrently
+     * with later messages, so it must not mutate the actor's state.
+     *
      * The default throws [AskNotHandledException], which fails the ask without supervising the actor.
      */
     context(context: ActorContext)

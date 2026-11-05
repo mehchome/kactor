@@ -8,11 +8,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import me.hchome.kactor.ActorContext
 import me.hchome.kactor.ActorHandler
 import me.hchome.kactor.ActorRef
 import me.hchome.kactor.ActorSystem
 import me.hchome.kactor.ActorSystemException
+import me.hchome.kactor.AskTimeoutException
 import me.hchome.kactor.Attributes
 import me.hchome.kactor.BehaviorBlock
 import me.hchome.kactor.MessagePriority
@@ -146,6 +148,21 @@ internal data class ActorContextImpl(
             return system.ask(ref, self.ref, message, priority)
         } else {
             throw ActorSystemException("Actor not in system")
+        }
+    }
+
+    override suspend fun <T : Any> askAndWait(
+        message: Any,
+        ref: ActorRef,
+        timeout: Duration,
+        priority: MessagePriority,
+    ): T {
+        val reply = ask<T>(message, ref, priority)
+        if (timeout.isInfinite()) return reply.await()
+        // a timeout must not surface as a cancellation, or the mailbox loop would take it as a stop
+        return withTimeoutOrNull(timeout) { reply.await() } ?: run {
+            reply.cancel()
+            throw AskTimeoutException(ref, timeout)
         }
     }
 
