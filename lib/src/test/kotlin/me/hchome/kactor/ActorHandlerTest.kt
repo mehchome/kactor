@@ -1,9 +1,12 @@
 package me.hchome.kactor
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
@@ -13,7 +16,10 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -26,6 +32,42 @@ class ActorHandlerTest {
         context(context: ActorContext)
         override suspend fun onAsk(message: Any, sender: ActorRef): Any =
             if (message == "boom") throw IllegalStateException("boom") else "re: $message"
+
+        context(context: ActorContext)
+        @Suppress("UNCHECKED_CAST")
+        override suspend fun onMessage(message: Any, sender: ActorRef) {
+            if (message is CompletableDeferred<*>) (message as CompletableDeferred<Unit>).complete(Unit)
+        }
+    }
+
+    /** Asks the actor to reply with [reply] instead of a plain value. */
+    data class DeferredReply(val reply: Deferred<Any?>)
+
+    /** Replies with a [DeferredReply]'s deferred; "never" replies with a task that runs until the actor stops. */
+    class DeferredActor : ActorHandler {
+        context(context: ActorContext)
+        override suspend fun onAsk(message: Any, sender: ActorRef): Any = when (message) {
+            is DeferredReply -> message.reply
+            "never" -> context.async { awaitCancellation() }
+            else -> "re: $message"
+        }
+
+        context(context: ActorContext)
+        @Suppress("UNCHECKED_CAST")
+        override suspend fun onMessage(message: Any, sender: ActorRef) {
+            if (message is CompletableDeferred<*>) (message as CompletableDeferred<Unit>).complete(Unit)
+        }
+    }
+
+    /** Asks [to] with [message] and waits for its reply, at most [timeout]. */
+    data class Forward(val to: ActorRef, val message: Any, val timeout: Duration)
+
+    class ForwardingActor : ActorHandler {
+        context(context: ActorContext)
+        override suspend fun onAsk(message: Any, sender: ActorRef): Any {
+            require(message is Forward)
+            return context.askAndWait<Any>(message.message, message.to, message.timeout)
+        }
 
         context(context: ActorContext)
         @Suppress("UNCHECKED_CAST")
@@ -85,6 +127,8 @@ class ActorHandlerTest {
         system = ActorSystem.createOrGet()
         system.register<ReplyingActor>("ReplyingActor")
         system.register<NoAskActor>("NoAskActor")
+        system.register<DeferredActor>("DeferredActor")
+        system.register<ForwardingActor>("ForwardingActor")
         system.register<BlockingActor>("BlockingActor")
         system.register<FailingStartActor>("FailingStartActor")
         system.register<StartParent>("StartParent")
@@ -147,6 +191,95 @@ class ActorHandlerTest {
             assertResponsive(ref)
             assertTrue(notified(ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, ref).isEmpty())
             assertTrue(notified(ActorSystemNotificationMessage.NotificationType.ACTOR_RESTARTED, ref).isEmpty())
+        }
+    }
+
+    // ── Deferred ask reply ───────────────────────────────────────────────────
+
+    @Nested
+    inner class DeferredAsk {
+        private fun ask(ref: ActorRef, message: Any) = system.ask<Any>(ref, ActorRef.EMPTY, message)
+
+        @Test
+        fun `deferred reply answers once completed without holding the mailbox`() = runBlocking<Unit> {
+            val ref = system.actorOfSuspend<DeferredActor>()
+            val gate = CompletableDeferred<Any?>()
+            val pending = ask(ref, DeferredReply(gate))
+
+            // the mailbox moved on: a later ask is answered while the first is still pending
+            assertEquals("re: ping", withTimeout(2.seconds) { ask(ref, "ping").await() })
+            assertFalse(pending.isCompleted)
+
+            gate.complete("late")
+            assertEquals("late", withTimeout(2.seconds) { pending.await() })
+        }
+
+        @Test
+        fun `failed deferred reply fails the ask and is not supervised`() = runBlocking<Unit> {
+            val ref = system.actorOfSuspend<DeferredActor>()
+            val gate = CompletableDeferred<Any?>()
+            val pending = ask(ref, DeferredReply(gate))
+
+            gate.completeExceptionally(IllegalStateException("late boom"))
+            val error = assertThrows<IllegalStateException> { withTimeout(2.seconds) { pending.await() } }
+            assertEquals("late boom", error.message)
+
+            assertResponsive(ref)
+            delay(300.milliseconds) // a supervised failure would be reported by now
+            assertTrue(notified(ActorSystemNotificationMessage.NotificationType.ACTOR_FATAL, ref).isEmpty())
+            assertTrue(notified(ActorSystemNotificationMessage.NotificationType.ACTOR_RESTARTED, ref).isEmpty())
+        }
+
+        @Test
+        fun `null deferred reply fails the ask`() = runBlocking<Unit> {
+            val ref = system.actorOfSuspend<DeferredActor>()
+            val pending = ask(ref, DeferredReply(CompletableDeferred<Any?>(null)))
+
+            assertThrows<IllegalStateException> { withTimeout(2.seconds) { pending.await() } }
+            assertResponsive(ref)
+        }
+
+        @Test
+        fun `deferred reply cancelled by stopping the actor does not leave the ask hanging`() = runBlocking<Unit> {
+            val ref = system.actorOfSuspend<DeferredActor>()
+            val pending = ask(ref, "never")
+            // asks are processed in order: once this one is answered, "never" has been handled
+            withTimeout(2.seconds) { ask(ref, "ping").await() }
+
+            system.destroyActor(ref)
+            assertNotNull(withTimeoutOrNull(2.seconds) { pending.join() }, "ask was left hanging")
+            assertIs<CancellationException>(runCatching { pending.await() }.exceptionOrNull())
+        }
+    }
+
+    // ── askAndWait ───────────────────────────────────────────────────────────
+
+    @Nested
+    inner class AskAndWait {
+        @Test
+        fun `askAndWait returns the reply`() = runBlocking<Unit> {
+            val target = system.actorOfSuspend<ReplyingActor>()
+            val ref = system.actorOfSuspend<ForwardingActor>()
+            val reply = system.ask<Any>(ref, ActorRef.EMPTY, Forward(target, "hi", 2.seconds))
+            assertEquals("re: hi", withTimeout(2.seconds) { reply.await() })
+        }
+
+        @Test
+        fun `askAndWait timeout is a supervised failure, not a cancellation`() = runBlocking<Unit> {
+            val target = system.actorOfSuspend<DeferredActor>()
+            val ref = system.actorOfSuspend<ForwardingActor>()
+            val never = DeferredReply(CompletableDeferred())
+
+            val error = assertThrows<AskTimeoutException> {
+                withTimeout(2.seconds) {
+                    system.ask<Any>(ref, ActorRef.EMPTY, Forward(target, never, 100.milliseconds)).await()
+                }
+            }
+            assertEquals(target, error.ref)
+
+            // supervised like any handler failure: the system supervisor restarts the actor
+            awaitNotification(ActorSystemNotificationMessage.NotificationType.ACTOR_RESTARTED, ref)
+            assertResponsive(ref)
         }
     }
 

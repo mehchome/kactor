@@ -171,6 +171,22 @@ interface ActorContext : Attributes {
     fun <T : Any> ask(message: Any, ref: ActorRef, priority: MessagePriority = MessagePriority.NORMAL): Deferred<T>
 
     /**
+     * [ask] the actor [ref] and suspend until it replies.
+     *
+     * While waiting, this actor processes no other messages, so two actors waiting on each other
+     * deadlock until [timeout]. To forward an ask without waiting, return the [ask] deferred from
+     * [ActorHandler.onAsk] instead.
+     *
+     * @throws AskTimeoutException if no reply arrives within [timeout]; the pending ask is cancelled
+     */
+    suspend fun <T : Any> askAndWait(
+        message: Any,
+        ref: ActorRef,
+        timeout: Duration = 10.seconds,
+        priority: MessagePriority = MessagePriority.NORMAL,
+    ): T
+
+    /**
      * Stop a child actor
      */
     fun stopChild(childRef: ActorRef)

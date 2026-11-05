@@ -1,5 +1,7 @@
 package me.hchome.kactor
 
+import kotlin.time.Duration
+
 /**
  * [ActorHandler.preStart] of the actor [ref] threw [cause]. Reported to the supervisor as the
  * [ActorFailure.cause], with [ActorFailure.message] set to [PRE_START]. The default
@@ -14,6 +16,18 @@ class ActorInitializationException(val ref: ActorRef, cause: Throwable) :
 
         /** [ActorFailure.message] of an initialization failure */
         const val PRE_START = "preStart"
+    }
+}
+
+/**
+ * [ActorContext.askAndWait] got no reply from the actor [ref] within [timeout]. Unlike a coroutine
+ * timeout it is not a cancellation, so when it escapes a handler it is supervised like any failure.
+ */
+class AskTimeoutException(val ref: ActorRef, val timeout: Duration) :
+    ActorException(CODE, "Ask to Actor[$ref] timed out after $timeout") {
+    companion object {
+        /** [ActorException.code] of an ask timeout */
+        const val CODE = "ASK_TIMEOUT"
     }
 }
 
