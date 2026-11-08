@@ -223,7 +223,7 @@ internal class ActorSystemImpl(
         return decision
     }
 
-    private fun handleSystemMessage(message: SystemMessage): Unit = try {
+    private suspend fun handleSystemMessage(message: SystemMessage): Unit = try {
         when (message) {
             is CreateActor -> actorRegistry.createActor(message)
             is StopActor -> actorRegistry.stopActor(message.ref)

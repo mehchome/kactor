@@ -50,7 +50,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         }
     }
 
-    override fun createActor(message: SystemMessage.CreateActor) {
+    override suspend fun createActor(message: SystemMessage.CreateActor) {
         val (_, _, _, callback) = message
         val configHolder = actorSystem[message.domain]
         val (_, dispatcher, config, _, _) = configHolder
@@ -68,7 +68,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
             config = config,
             mailbox = newMailbox,
             runtimeScope = newRuntimeScope,
-            handler = message.handler,
+            handler = message.newHandler(),
             attributes = newAttributes,
             props = message.props,
         )
@@ -115,7 +115,7 @@ internal class LocalActorRegistry : AbstractActorRegistry() {
         unregisterActor(ref)
     }
 
-    override fun restartActor(ref: ActorRef, recreate: Boolean) {
+    override suspend fun restartActor(ref: ActorRef, recreate: Boolean) {
         if (ref.isEmpty()) return
         actors[ref] ?: return
         val runtimeScope = runtimeScopes[ref] ?: return

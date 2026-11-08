@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.reflect.KClass
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -385,6 +387,50 @@ class ActorHandlerTest {
                 lambdaSystem.shutdownGracefully()
             }
         }
+
+        @Test
+        fun `suspend factory creates handlers and recreates them on restart`() = runBlocking<Unit> {
+            val created = AtomicInteger()
+            val suspendSystem = ActorSystem.createOrGet()
+            suspendSystem.registerSuspend<GenerationActor>("Generation") { props ->
+                delay(10) // creation may suspend
+                GenerationActor("${props.get<String>("name")}#${created.incrementAndGet()}")
+            }
+            val restarted = CompletableDeferred<Unit>()
+            suspendSystem += ActorSystemMessageListener {
+                if (it.type == ActorSystemNotificationMessage.NotificationType.ACTOR_RESTARTED) restarted.complete(Unit)
+            }
+            suspendSystem.start()
+            try {
+                val ref = suspendSystem.actorOfSuspend<GenerationActor>(props = Props.of("name" to "g"))
+                assertEquals("g#1", withTimeout(2.seconds) { suspendSystem.ask<Any>(ref, ActorRef.EMPTY, "q").await() })
+
+                // the failure makes the system supervisor restart the actor through the suspend factory
+                assertThrows<IllegalStateException> {
+                    withTimeout(2.seconds) { suspendSystem.ask<Any>(ref, ActorRef.EMPTY, "boom").await() }
+                }
+                withTimeout(3.seconds) { restarted.await() }
+                assertEquals("g#2", withTimeout(2.seconds) { suspendSystem.ask<Any>(ref, ActorRef.EMPTY, "q").await() })
+            } finally {
+                suspendSystem.shutdownGracefully()
+            }
+        }
+
+        @Test
+        fun `suspend factory rejects blocking creation`() {
+            val factory = object : SuspendActorHandlerFactory {
+                override suspend fun <T : ActorHandler> getBeanSuspend(kClass: KClass<T>, props: Props): T =
+                    error("not called")
+            }
+            assertThrows<UnsupportedOperationException> { factory.getBean<GenerationActor>() }
+        }
+    }
+
+    /** Replies with the generation it was created as; "boom" throws. */
+    class GenerationActor(private val generation: String) : ActorHandler {
+        context(context: ActorContext)
+        override suspend fun onAsk(message: Any, sender: ActorRef): Any =
+            if (message == "boom") throw IllegalStateException("boom") else generation
     }
 
     object SingletonHandler : ActorHandler
