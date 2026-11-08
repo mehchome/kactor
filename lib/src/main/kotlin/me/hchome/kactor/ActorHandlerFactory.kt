@@ -28,9 +28,33 @@ interface ActorHandlerFactory {
      * @return actor handler
      */
     fun <T> getBean(kClass: KClass<T>, props: Props): T where T : ActorHandler
+
+    /**
+     * Suspending variant of [getBean]; this is what the actor system calls when it spawns or
+     * restarts an actor. Defaults to the blocking [getBean].
+     *
+     * Creation runs on the system mailbox, so other create/stop/restart requests wait while it
+     * suspends: keep it short (e.g. a lookup), not a long-running job.
+     */
+    suspend fun <T> getBeanSuspend(kClass: KClass<T>, props: Props): T where T : ActorHandler =
+        getBean(kClass, props)
 }
 
 inline fun <reified T> ActorHandlerFactory.getBean(): T where T : ActorHandler = getBean(T::class)
+
+/**
+ * Factory whose handler creation suspends, e.g. to load state or resolve dependencies first.
+ * Implement [getBeanSuspend]; the blocking [getBean] is not supported.
+ */
+interface SuspendActorHandlerFactory : ActorHandlerFactory {
+
+    override suspend fun <T> getBeanSuspend(kClass: KClass<T>, props: Props): T where T : ActorHandler
+
+    override fun <T> getBean(kClass: KClass<T>, props: Props): T where T : ActorHandler =
+        throw UnsupportedOperationException(
+            "${this::class.simpleName} creates handlers by suspending; call getBeanSuspend instead"
+        )
+}
 
 /**
  * Creates handlers by reflection: the constructor whose parameters are all either optional or

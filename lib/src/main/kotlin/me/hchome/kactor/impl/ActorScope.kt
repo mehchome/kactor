@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 
-interface ActorScope {
+internal interface ActorScope {
     val actorJob: Job
 
     fun <R> inScope(block: CoroutineScope.() -> R): R

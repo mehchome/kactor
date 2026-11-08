@@ -19,7 +19,7 @@ import me.hchome.kactor.isNotEmpty
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.collections.set
 
-abstract class AbstractActorRegistry : ActorRegistry {
+internal abstract class AbstractActorRegistry : ActorRegistry {
 
     protected abstract val actors: MutableMap<ActorRef, Actor>
     protected abstract val runtimeScopes: MutableMap<ActorRef, ActorScope>
@@ -123,7 +123,7 @@ abstract class AbstractActorRegistry : ActorRegistry {
         childReferences(ref).forEach { rebuildAttributeStore(it) }
     }
 
-    protected fun rebuildActors(ref: ActorRef) {
+    protected suspend fun rebuildActors(ref: ActorRef) {
         if (ref.isEmpty()) return
         val oldActor = actors[ref] ?: return
         val targetChannel = actorChannels[ref] ?: return
@@ -196,8 +196,7 @@ abstract class AbstractActorRegistry : ActorRegistry {
         )
     }
 
-    protected val CreateActor.handler: ActorHandler
-        get() = actorSystem[domain].newActorHandler(props)
+    protected suspend fun CreateActor.newHandler(): ActorHandler = actorSystem[domain].newActorHandler(props)
 
     protected val ActorRef.supervisor: Supervisor
         get() = if (hasParent) actors[parentOf()] ?: systemSupervisor else systemSupervisor

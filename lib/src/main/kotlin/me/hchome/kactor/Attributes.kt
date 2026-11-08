@@ -6,7 +6,7 @@ import kotlin.reflect.KClass
 import kotlin.reflect.KType
 
 /**
- * Represents an attribute map of an [Actor] in the actor scope. From Jetbrains Ktor Project
+ * Represents an actor's attribute map; an [ActorContext] is itself the attribute map of its actor. From Jetbrains Ktor Project
  */
 interface Attributes {
 

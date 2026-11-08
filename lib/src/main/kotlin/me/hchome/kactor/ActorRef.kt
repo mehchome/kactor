@@ -6,7 +6,8 @@ import kotlin.reflect.KClass
 
 /**
  * Actor reference
- * @see Actor
+ * @see ActorContext.ref
+ * @see ActorSystem
  */
 data class ActorRef(
     /**

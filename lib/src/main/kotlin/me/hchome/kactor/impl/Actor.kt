@@ -76,7 +76,7 @@ private typealias AskActorHandlerScope = suspend ActorHandler.(Any, ActorRef, Co
  * @see ActorHandler
  * @see SupervisorStrategy
  */
-class Actor internal constructor(
+internal class Actor(
     val ref: ActorRef,
     val domain: String,
     private val actorSystem: ActorSystem,

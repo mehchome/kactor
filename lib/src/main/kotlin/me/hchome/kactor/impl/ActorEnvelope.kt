@@ -8,7 +8,7 @@ import me.hchome.kactor.SupervisorStrategy
 /**
  * Message wrapper used inside an actor's mailbox.
  */
-sealed interface ActorEnvelope {
+internal sealed interface ActorEnvelope {
     val message: Any
     val sender: ActorRef
 
