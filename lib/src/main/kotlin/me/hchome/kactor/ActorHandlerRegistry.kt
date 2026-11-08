@@ -78,6 +78,26 @@ inline fun <reified T> ActorHandlerRegistry.register(
     register(domain, dispatcher, config, LambdaActorHandlerFactory(T::class, create), T::class)
 }
 
+/**
+ * Register a handler created by the suspending [create], for creation that needs to suspend,
+ * e.g. to load state or resolve dependencies first.
+ *
+ * Creation runs on the system mailbox, so keep it short: other create/stop/restart requests
+ * wait while it suspends.
+ *
+ * ```
+ * system.registerSuspend<DeviceActor>("device") { props -> DeviceActor(repo.load(props.get("deviceId"))) }
+ * ```
+ */
+inline fun <reified T> ActorHandlerRegistry.registerSuspend(
+    domain: String,
+    dispatcher: CoroutineDispatcher? = null,
+    config: ActorConfig = ActorConfig.DEFAULT,
+    noinline create: suspend (Props) -> T,
+) where T : ActorHandler {
+    register(domain, dispatcher, config, SuspendLambdaActorHandlerFactory(T::class, create), T::class)
+}
+
 /** Adapts a creation lambda to [ActorHandlerFactory], for the lambda `register` overload. */
 @PublishedApi
 internal class LambdaActorHandlerFactory<H : ActorHandler>(
@@ -86,10 +106,26 @@ internal class LambdaActorHandlerFactory<H : ActorHandler>(
 ) : ActorHandlerFactory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ActorHandler> getBean(kClass: KClass<T>, props: Props): T {
-        require(kClass == this.kClass) { "Factory for ${this.kClass} cannot create $kClass" }
+        requireClass(this.kClass, kClass)
         return create(props) as T
     }
 }
+
+/** Adapts a suspending creation lambda to [ActorHandlerFactory], for [registerSuspend]. */
+@PublishedApi
+internal class SuspendLambdaActorHandlerFactory<H : ActorHandler>(
+    private val kClass: KClass<H>,
+    private val create: suspend (Props) -> H,
+) : SuspendActorHandlerFactory {
+    @Suppress("UNCHECKED_CAST")
+    override suspend fun <T : ActorHandler> getBeanSuspend(kClass: KClass<T>, props: Props): T {
+        requireClass(this.kClass, kClass)
+        return create(props) as T
+    }
+}
+
+private fun requireClass(expected: KClass<*>, actual: KClass<*>) =
+    require(actual == expected) { "Factory for $expected cannot create $actual" }
 
 data class ActorHandlerConfigHolder(
     val domain: String,
@@ -101,5 +137,5 @@ data class ActorHandlerConfigHolder(
     /**
      * create a new actor handler instance
      */
-    fun newActorHandler(props: Props = Props.EMPTY) = factory.getBean(kClass, props)
+    internal suspend fun newActorHandler(props: Props = Props.EMPTY) = factory.getBeanSuspend(kClass, props)
 }

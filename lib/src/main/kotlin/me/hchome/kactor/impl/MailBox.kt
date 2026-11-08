@@ -26,7 +26,7 @@ import me.hchome.kactor.MessagePriority
  * @param onReject called with every envelope that will never be delivered, and the reason.
  *   Must be fast, non-blocking and must not throw.
  */
-class MailBox(
+internal class MailBox(
     capacity: Int,
     onBufferOverflow: BufferOverflow,
     private val onReject: (ActorEnvelope, Throwable) -> Unit,

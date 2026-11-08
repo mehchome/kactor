@@ -33,7 +33,7 @@ interface ActorRegistry: ActorSystemInitializationListener {
     /**
      * create an actor
      */
-    fun createActor(message: CreateActor)
+    suspend fun createActor(message: CreateActor)
 
     /**
      * stop an actor
@@ -43,7 +43,7 @@ interface ActorRegistry: ActorSystemInitializationListener {
     /**
      * restart an actor
      */
-    fun restartActor(ref: ActorRef, recreate: Boolean)
+    suspend fun restartActor(ref: ActorRef, recreate: Boolean)
 
     /**
      * stop all actors
